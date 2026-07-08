@@ -1,3 +1,4 @@
 .DS_Store
 tracks.txt
 export/
+.cache/
