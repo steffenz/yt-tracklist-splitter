@@ -63,9 +63,19 @@ python3 split-set.py "https://youtu.be/VIDEO_ID" --tracklist tracks.txt --dry-ru
 python3 split-set.py "https://youtu.be/VIDEO_ID" --tracklist tracks.txt
 ```
 
-Output lands in a folder named after the album (the video title), e.g.
-`Artist @ Venue 2024 - tracks/`, containing numbered, tagged tracks plus
-`cover.jpg`.
+Output lands in `Downloads/Albums/<album>/` (named after the video title), e.g.
+`Downloads/Albums/Artist @ Venue 2024/`, containing numbered, tagged tracks plus
+`cover.jpg`. The whole `Downloads/` folder is git-ignored automatically. Pass
+`-o/--outdir` to write somewhere else.
+
+Everything the script produces lives under `Downloads/`:
+
+```
+Downloads/            (git-ignored)
+├── Temporary/        cached source audio + thumbnails (reused across runs)
+└── Albums/
+    └── <album>/      finished split tracks + cover.jpg
+```
 
 ---
 
@@ -108,7 +118,7 @@ python3 split-set.py "<URL>" --tracklist tracks.txt \
 | `--from-description` | Try to pull the tracklist from the video description. *(Won't catch timestamps that live in a **comment** — use a file for those.)* |
 | `--regex PATTERN` | Custom named-group regex (`ts`, `title`, `artist`). |
 | `--audio-format FMT` | Force a format (`m4a`, `mp3`, `opus`, `flac`…). **Default: keep the source's native format** (recommended). |
-| `-o, --outdir DIR` | Output directory (default: `<album> - tracks`). |
+| `-o, --outdir DIR` | Output directory (default: `Downloads/Albums/<album>`). |
 | `--album NAME` | Override the album name (default: the video title). |
 | `--no-cover` | Skip fetching/embedding the thumbnail. |
 | `--no-crop` | Keep the 16:9 thumbnail instead of square-cropping it. |
@@ -120,14 +130,17 @@ python3 split-set.py "<URL>" --tracklist tracks.txt \
 
 ## Caching
 
-Downloads and thumbnails are cached in `./.cache/`, named by video ID and quality
-profile (e.g. `src_dQw4w9WgXcQ_opus.opus`). Consequences:
+Downloads and thumbnails are cached in `Downloads/Temporary/`, named by video ID
+and quality profile (e.g. `src_dQw4w9WgXcQ_opus.opus`). Consequences:
 
 - Re-running to tweak a tracklist **re-splits from cache** — no second download.
 - Requesting a **different** quality profile (e.g. forcing `mp3`) is a different
   cache key, so it fetches fresh.
-- The script auto-creates `.cache/.gitignore` and appends `.cache/` to your
-  top-level `.gitignore`, so cached audio never gets committed.
+- Everything the script writes lives under `Downloads/`, which is git-ignored
+  automatically (a nested `Downloads/.gitignore` plus a `Downloads/` entry in your
+  top-level `.gitignore`), so neither cached audio nor finished tracks get
+  committed. The cache is **visible** (not a hidden dot-folder) on purpose — set
+  files are large, so you can see and prune them by hand.
 - Cache is **kept by default**. Use `--clean-cache` for a one-off run you don't
   want to keep the source of.
 
