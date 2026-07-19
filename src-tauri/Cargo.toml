@@ -1,11 +1,11 @@
 [package]
-name = "split-set"
+name = "yt-tracklist-splitter"
 version = "0.1.0"
 description = "Download a YouTube DJ set and split it into tagged tracks"
 edition = "2021"
 
 [lib]
-name = "split_set_lib"
+name = "yt_tracklist_splitter_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

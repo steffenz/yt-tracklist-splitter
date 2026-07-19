@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    split_set_lib::run()
+    yt_tracklist_splitter_lib::run()
 }

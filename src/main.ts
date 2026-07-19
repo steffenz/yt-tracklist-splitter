@@ -10,7 +10,7 @@ const app = document.querySelector<HTMLDivElement>("#app")!;
 
 app.innerHTML = /* html */ `
   <header class="topbar">
-    <div class="brand">🎧 <b>split-set</b> <span class="sub">DJ set / compilation splitter</span></div>
+    <div class="brand">🎧 <b>yt-tracklist-splitter</b> <span class="sub">DJ set / compilation splitter</span></div>
     <div class="tools">
       <span id="ytdlpVer" class="ver">yt-dlp …</span>
       <button id="btnUpdate" class="ghost" title="Self-update the bundled yt-dlp">Update yt-dlp</button>

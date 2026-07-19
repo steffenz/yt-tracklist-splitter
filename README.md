@@ -1,4 +1,4 @@
-# 🎧 split-set
+# 🎧 yt-tracklist-splitter
 
 A small cross-platform **desktop app** (Tauri) that downloads a YouTube **DJ set /
 compilation** at the highest available audio quality and slices it into clean, tagged
@@ -7,6 +7,22 @@ Symfonium, Plex, or any music library.
 
 Built for the "one long mix, tracklist in the description (or a comment)" problem — and
 now with a GUI so you can review and adjust everything **before** you run the job.
+
+---
+
+## ⚠️ Personal use only
+
+This is a **personal utility for private use**, intended solely for downloading and
+splitting content **you already own or otherwise have the right to download** (e.g. your
+own uploads, or material that is explicitly free of restrictions).
+
+- **Do not** use it for copyrighted material you don't have the rights to, and don't
+  redistribute anything you produce with it.
+- Downloading from YouTube may conflict with YouTube's Terms of Service; you are
+  responsible for ensuring your use is lawful in your jurisdiction and for the content in
+  question.
+- No warranty. The authors take no responsibility for how the tool is used — using it is
+  entirely at your own risk.
 
 ---
 
@@ -131,4 +147,5 @@ release builds, update by reinstalling the app.
 
 ## License
 
-Personal utility — use and modify freely.
+Personal utility — use and modify freely, subject to the **Personal use only** note at
+the top. Provided as-is, without warranty of any kind.

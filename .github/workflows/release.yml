@@ -49,7 +49,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: .
-          tagName: split-set-v__VERSION__
-          releaseName: "split-set v__VERSION__"
+          tagName: yt-tracklist-splitter-v__VERSION__
+          releaseName: "yt-tracklist-splitter v__VERSION__"
           releaseDraft: true
           prerelease: false
