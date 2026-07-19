@@ -140,8 +140,11 @@ files (e.g. `cover.*, folder.*, front.*, embedded`).
 ## Keeping yt-dlp fresh
 
 Most "it suddenly stopped working" issues are YouTube changing something and a stale
-`yt-dlp`. Use the **Update yt-dlp** button (works for local/dev builds); for signed
-release builds, update by reinstalling the app.
+`yt-dlp`. `yt-dlp` is bundled with the app, so to refresh it, **install a newer app
+release** — each CI build re-fetches the latest `yt-dlp` at bundle time. (An installed
+app can't self-update its own bundled binary: it lives inside the app bundle, which is
+read-only/admin-owned and, once signed, can't be modified without breaking the
+signature.) For local development, just re-run `npm run fetch-binaries`.
 
 ---
 

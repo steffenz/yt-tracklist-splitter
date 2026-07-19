@@ -189,13 +189,3 @@ pub async fn version(app: &AppHandle) -> Result<String, String> {
     let (_ok, out, _err) = sh::capture(app, "yt-dlp", vec!["--version".into()]).await?;
     Ok(out.trim().to_string())
 }
-
-/// Attempt an in-place self-update (works for the unsigned/dev binary).
-pub async fn update(app: &AppHandle) -> Result<String, String> {
-    let (ok, out, err) = sh::capture(app, "yt-dlp", vec!["-U".into()]).await?;
-    if ok {
-        Ok(format!("{}\n{}", out.trim(), err.trim()).trim().to_string())
-    } else {
-        Err(sh::tail(&format!("{out}\n{err}"), 6))
-    }
-}

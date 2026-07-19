@@ -84,7 +84,6 @@ export const api = {
     invoke<string>("get_thumbnail", { url, videoId }),
   defaultOutputDir: (album: string) => invoke<string>("default_output_dir", { album }),
   ytdlpVersion: () => invoke<string>("ytdlp_version"),
-  updateYtdlp: () => invoke<string>("update_ytdlp"),
   clearCache: () => invoke<number>("clear_cache"),
   cancel: () => invoke<void>("cancel_job"),
   runJob: (cfg: JobConfig) => invoke<string>("run_job", { cfg }),

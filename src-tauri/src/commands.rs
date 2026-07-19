@@ -76,11 +76,6 @@ pub async fn ytdlp_version(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn update_ytdlp(app: AppHandle) -> Result<String, String> {
-    ytdlp::update(&app).await
-}
-
-#[tauri::command]
 pub fn clear_cache(app: AppHandle) -> Result<usize, String> {
     let dir = cache::cache_dir(&app)?;
     Ok(cache::clear_all(&dir))

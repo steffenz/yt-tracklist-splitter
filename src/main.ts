@@ -13,7 +13,6 @@ app.innerHTML = /* html */ `
     <div class="brand">🎧 <b>yt-tracklist-splitter</b> <span class="sub">DJ set / compilation splitter</span></div>
     <div class="tools">
       <span id="ytdlpVer" class="ver">yt-dlp …</span>
-      <button id="btnUpdate" class="ghost" title="Self-update the bundled yt-dlp">Update yt-dlp</button>
       <button id="btnClearCache" class="ghost" title="Delete all cached downloads">Clear cache</button>
     </div>
   </header>
@@ -165,17 +164,6 @@ const setStatus = (msg: string, kind: "" | "err" | "ok" = "") => {
 
 // ---- yt-dlp version + maintenance -------------------------------------------
 api.ytdlpVersion().then((v) => ($("#ytdlpVer").textContent = `yt-dlp ${v}`)).catch(() => {});
-$("#btnUpdate").addEventListener("click", async () => {
-  $("#ytdlpVer").textContent = "updating yt-dlp…";
-  try {
-    await api.updateYtdlp();
-    const v = await api.ytdlpVersion();
-    $("#ytdlpVer").textContent = `yt-dlp ${v}`;
-  } catch (e) {
-    $("#ytdlpVer").textContent = `update failed`;
-    console.error(e);
-  }
-});
 $("#btnClearCache").addEventListener("click", async () => {
   const n = await api.clearCache();
   setStatus(`Cleared ${n} cached file(s).`, "ok");

@@ -31,7 +31,6 @@ pub fn run() {
             commands::get_thumbnail,
             commands::default_output_dir,
             commands::ytdlp_version,
-            commands::update_ytdlp,
             commands::clear_cache,
             commands::cancel_job,
             commands::run_job,
