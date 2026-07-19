@@ -30,20 +30,22 @@ pub fn hms_to_seconds(ts: &str) -> Option<f64> {
     }
 }
 
-/// A boundary-valid timestamp is not glued to another digit or a further `:` group.
-fn first_timestamp(line: &str) -> Option<(usize, usize, f64)> {
+/// All boundary-valid timestamps on a line (not glued to another digit or `:` group),
+/// as `(start_byte, end_byte, seconds)`.
+fn all_timestamps(line: &str) -> Vec<(usize, usize, f64)> {
     let bytes = line.as_bytes();
+    let mut out = Vec::new();
     for m in TS_RE.find_iter(line) {
         let (s, e) = (m.start(), m.end());
         let before_ok = s == 0 || !bytes[s - 1].is_ascii_digit();
         let after_ok = e >= bytes.len() || (!bytes[e].is_ascii_digit() && bytes[e] != b':');
         if before_ok && after_ok {
             if let Some(secs) = hms_to_seconds(m.as_str()) {
-                return Some((s, e, secs));
+                out.push((s, e, secs));
             }
         }
     }
-    None
+    out
 }
 
 fn clean_text(rest: &str) -> String {
@@ -74,11 +76,18 @@ pub fn parse_heuristic(text: &str, artist_first: bool) -> Vec<Track> {
         if line.is_empty() {
             continue;
         }
-        let Some((s, e, start)) = first_timestamp(line) else { continue };
+        let stamps = all_timestamps(line);
+        let Some(&(_, _, start)) = stamps.first() else { continue };
+        // Remove EVERY timestamp from the title text, so a `start - end - Title` range
+        // (e.g. "00:04:31 - 00:06:11 - Track") doesn't leave the end time in the title.
         let mut rest = String::with_capacity(line.len());
-        rest.push_str(&line[..s]);
-        rest.push(' ');
-        rest.push_str(&line[e..]);
+        let mut prev = 0;
+        for &(s, e, _) in &stamps {
+            rest.push_str(&line[prev..s]);
+            rest.push(' ');
+            prev = e;
+        }
+        rest.push_str(&line[prev..]);
         let cleaned = clean_text(&rest);
         let (title, artist) = split_title_artist(&cleaned, artist_first);
         out.push(Track { start, title, artist });
@@ -237,6 +246,21 @@ mod tests {
     }
 
     #[test]
+    fn handles_start_end_range_lines() {
+        let t = "00:04:31 - 00:06:11 - Track Name - Artist\n\
+                 6:11 - 9:00 Another One - Someone\n\
+                 9:00 Plain - Nobody";
+        let tracks = parse_heuristic(t, false);
+        assert_eq!(tracks.len(), 3);
+        assert_eq!(tracks[0].start, 271.0); // 4:31
+        assert_eq!(tracks[0].title, "Track Name");
+        assert_eq!(tracks[0].artist, "Artist");
+        assert_eq!(tracks[1].start, 371.0); // 6:11, not the 9:00 end
+        assert_eq!(tracks[1].title, "Another One");
+        assert_eq!(tracks[1].artist, "Someone");
+    }
+
+    #[test]
     fn timestamp_at_end_of_line() {
         let t = "Nightcall - Kavinsky 3:24\nMidnight City - M83 7:10\nStarted - Someone 9:99extra 10:00";
         let tracks = parse_heuristic(t, false);
@@ -264,6 +288,7 @@ mod tests {
             description: "great mix, loved the drop at 2:30".into(),
             comments: vec![],
             native_ext: "opus".into(),
+            native_abr: 0.0,
         };
         assert!(detect(&info).is_empty());
     }

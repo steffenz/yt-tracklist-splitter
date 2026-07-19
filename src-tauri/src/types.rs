@@ -21,6 +21,8 @@ pub struct VideoInfo {
     pub comments: Vec<Comment>,
     /// yt-dlp's native best-audio extension, normalized (opus/m4a/...); used for "native" format.
     pub native_ext: String,
+    /// Best audio-only bitrate in kbps (0 if unknown). Lossy transcodes are capped to this.
+    pub native_abr: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -67,6 +69,8 @@ pub struct JobConfig {
     pub tracks: Vec<Track>,
     /// "native" resolves to the source ext; otherwise a concrete ext (m4a/mp3/opus/flac/wav).
     pub audio_format: String,
+    /// Source bitrate in kbps (from VideoInfo.native_abr); caps lossy transcodes.
+    pub source_abr: f64,
     pub album: String,
     pub album_artist: String,
     /// "none" | "youtube" | "custom"

@@ -104,18 +104,42 @@ pub async fn run_job(
     let fmt = cfg.audio_format.to_lowercase();
     let dir = cache::cache_dir(&app)?;
 
-    // 1. Download (cached).
+    // 1. Download native audio once (cached), then normalize with our bundled ffmpeg.
     emit_progress(&app, "download", "Fetching audio…", 0, 0, 0.0);
-    log(&app, format!(">> downloading best audio as {fmt} (cached by video id)"));
-    let app2 = app.clone();
-    let source = ytdlp::download_audio(&app, &cfg.url, &cfg.video_id, &fmt, &dir, |pct, line| {
-        emit_progress(&app2, "download", &line, 0, 0, pct);
-    })
-    .await?;
+    let source = if let Some(p) = cache::cached_source(&dir, &cfg.video_id, "native") {
+        log(&app, ">> using cached source");
+        p
+    } else {
+        let app2 = app.clone();
+        let raw = ytdlp::download_native(&app, &cfg.url, &cfg.video_id, &dir, |pct, line| {
+            emit_progress(&app2, "download", &line, 0, 0, pct);
+        })
+        .await?;
+        if cancelled() {
+            let _ = fs::remove_file(&raw);
+            return Err("Cancelled.".into());
+        }
+        emit_progress(&app, "download", "Preparing source…", 0, 0, 100.0);
+        let native = media::normalize_source(&app, &raw, &cfg.video_id, &dir).await?;
+        let _ = fs::remove_file(&raw);
+        native
+    };
     if cancelled() {
         return Err("Cancelled.".into());
     }
-    log(&app, format!(">> source ready: {}", source.display()));
+    let source_codec = media::source_codec(&source);
+    let is_copy = (fmt == "opus" && source_codec == "opus")
+        || ((fmt == "m4a" || fmt == "aac") && source_codec == "aac");
+    let out_note = if is_copy {
+        " (stream copy, no re-encode)".to_string()
+    } else if fmt == "flac" || fmt == "wav" {
+        " (lossless/uncompressed)".to_string()
+    } else if cfg.source_abr > 0.0 {
+        format!(" @ ~{} kbps (capped to source)", cfg.source_abr.round() as i64)
+    } else {
+        String::new()
+    };
+    log(&app, format!(">> source ready ({source_codec}); output {fmt}{out_note}"));
 
     // 2. Cover.
     let mut cover: Option<PathBuf> = None;
@@ -178,6 +202,8 @@ pub async fn run_job(
             end,
             &out,
             &fmt,
+            &source_codec,
+            cfg.source_abr,
             t,
             &cfg.album,
             &cfg.album_artist,
@@ -195,7 +221,8 @@ pub async fn run_job(
         log(&app, ">> wrote cover.jpg");
     }
     if cfg.keep_full {
-        let _ = fs::copy(&source, outdir.join(format!("00 - FULL SET.{fmt}")));
+        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("m4a");
+        let _ = fs::copy(&source, outdir.join(format!("00 - FULL SET.{ext}")));
         log(&app, ">> kept full set");
     }
     cache::clean_thumbraw(&dir, &cfg.video_id);

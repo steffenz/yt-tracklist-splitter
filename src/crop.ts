@@ -6,6 +6,10 @@ type Rect = { x: number; y: number; w: number; h: number };
 /**
  * A draggable + corner-resizable crop rectangle drawn over an <img>. Coordinates are
  * kept in *displayed* pixels and converted to natural (source) pixels via getRect().
+ *
+ * A ResizeObserver keeps the overlay sized to the image — and, crucially, re-derives the
+ * default box the moment the image gains a real size or the panel becomes visible, so the
+ * centered square shows correctly on first load (no need to hit "Reset").
  */
 export class CropBox {
   private img: HTMLImageElement;
@@ -13,9 +17,10 @@ export class CropBox {
   private box: HTMLDivElement;
   private rect: Rect = { x: 0, y: 0, w: 0, h: 0 }; // display px, relative to the image box
   square = true;
+  private userAdjusted = false;
   private drag: { handle: Handle; sx: number; sy: number; start: Rect } | null = null;
 
-  constructor(private container: HTMLElement, onChange?: () => void) {
+  constructor(private container: HTMLElement, private onChange?: () => void) {
     this.container.classList.add("crop-container");
     this.img = document.createElement("img");
     this.img.className = "crop-img";
@@ -33,46 +38,36 @@ export class CropBox {
     this.container.appendChild(this.img);
     this.container.appendChild(this.overlay);
 
-    this.img.addEventListener("load", () => {
-      this.overlay.style.width = `${this.img.clientWidth}px`;
-      this.overlay.style.height = `${this.img.clientHeight}px`;
-      this.reset();
-      onChange?.();
-    });
+    // Fires on image load, on window resize, AND when the panel un-hides (0 -> real size).
+    new ResizeObserver(() => this.onResize()).observe(this.img);
 
     const onDown = (e: PointerEvent) => {
-      const target = e.target as HTMLElement;
-      const handle = (target.dataset.handle as Handle) || "move";
+      const handle = ((e.target as HTMLElement).dataset.handle as Handle) || "move";
       this.drag = { handle, sx: e.clientX, sy: e.clientY, start: { ...this.rect } };
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
       e.preventDefault();
     };
     const onMove = (e: PointerEvent) => {
       if (!this.drag) return;
+      this.userAdjusted = true;
       this.applyDrag(e.clientX - this.drag.sx, e.clientY - this.drag.sy);
       this.render();
-      onChange?.();
+      this.onChange?.();
     };
-    const onUp = () => (this.drag = null);
     this.box.addEventListener("pointerdown", onDown);
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("resize", () => {
-      this.overlay.style.width = `${this.img.clientWidth}px`;
-      this.overlay.style.height = `${this.img.clientHeight}px`;
-      this.clamp();
-      this.render();
-    });
+    window.addEventListener("pointerup", () => (this.drag = null));
   }
 
   setImage(src: string) {
-    this.img.src = src;
+    this.userAdjusted = false; // a new image gets a fresh default box
+    if (src) this.img.src = src;
+    else this.img.removeAttribute("src"); // clear cleanly (no broken-image flash)
   }
 
   get hasImage() {
     return !!this.img.src && this.img.complete && this.img.naturalWidth > 0;
   }
-
   private dispW() {
     return this.img.clientWidth;
   }
@@ -80,10 +75,25 @@ export class CropBox {
     return this.img.clientHeight;
   }
 
+  private onResize() {
+    const w = this.dispW();
+    const h = this.dispH();
+    if (w === 0 || h === 0) return; // hidden / not laid out yet
+    this.overlay.style.width = `${w}px`;
+    this.overlay.style.height = `${h}px`;
+    if (!this.userAdjusted) this.reset();
+    else {
+      this.clamp();
+      this.render();
+    }
+  }
+
   /** Centered largest square (or full frame when square-lock is off). */
   reset() {
+    this.userAdjusted = false;
     const W = this.dispW();
     const H = this.dispH();
+    if (W === 0 || H === 0) return;
     if (this.square) {
       const s = Math.min(W, H);
       this.rect = { x: (W - s) / 2, y: (H - s) / 2, w: s, h: s };
@@ -91,6 +101,7 @@ export class CropBox {
       this.rect = { x: 0, y: 0, w: W, h: H };
     }
     this.render();
+    this.onChange?.();
   }
 
   setSquare(sq: boolean) {

@@ -1,7 +1,7 @@
 //! yt-dlp sidecar wrappers: video info + comments, audio download, thumbnail.
 
+use crate::sh;
 use crate::types::{Comment, VideoInfo};
-use crate::{cache, sh};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
@@ -19,10 +19,11 @@ fn normalize_ext(ext: &str) -> String {
     }
 }
 
-/// Pick the best audio-only format's extension from the info JSON's `formats` list.
-fn native_ext_from_formats(v: &Value) -> String {
+/// Pick the best audio-only format from the info JSON's `formats` list,
+/// returning its normalized extension and bitrate (kbps, 0 if unknown).
+fn native_audio(v: &Value) -> (String, f64) {
     let Some(formats) = v.get("formats").and_then(|f| f.as_array()) else {
-        return "m4a".into();
+        return ("m4a".into(), 0.0);
     };
     let mut best: Option<(f64, String)> = None;
     for f in formats {
@@ -41,8 +42,12 @@ fn native_ext_from_formats(v: &Value) -> String {
             best = Some((rate, ext));
         }
     }
-    normalize_ext(&best.map(|(_, e)| e).unwrap_or_default())
+    match best {
+        Some((rate, ext)) => (normalize_ext(&ext), rate),
+        None => ("m4a".into(), 0.0),
+    }
 }
+
 
 fn derive_id(v: &Value, url: &str) -> String {
     if let Some(id) = v.get("id").and_then(|x| x.as_str()) {
@@ -94,6 +99,7 @@ pub async fn fetch_info(app: &AppHandle, url: &str) -> Result<VideoInfo, String>
         return Err(format!("yt-dlp could not read this URL:\n{}", sh::tail(&stderr, 6)));
     }
     let v: Value = serde_json::from_str(&stdout).map_err(|e| format!("unexpected yt-dlp output: {e}"))?;
+    let (native_ext, native_abr) = native_audio(&v);
     Ok(VideoInfo {
         id: derive_id(&v, url),
         title: v.get("title").and_then(|x| x.as_str()).unwrap_or("Unknown title").to_string(),
@@ -107,54 +113,63 @@ pub async fn fetch_info(app: &AppHandle, url: &str) -> Result<VideoInfo, String>
         thumbnail_url: v.get("thumbnail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         description: v.get("description").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         comments: parse_comments(&v),
-        native_ext: native_ext_from_formats(&v),
+        native_ext,
+        native_abr,
     })
 }
 
-/// Download best audio, converting to `fmt`, cached by id+format. Emits download
-/// percentage through `on_pct`.
-pub async fn download_audio<F: FnMut(f64, String)>(
+/// Download the best audio in its NATIVE container (no `-x`, so yt-dlp needs no ffmpeg
+/// — the shipped app has none on PATH). Format conversion is done later by our bundled
+/// ffmpeg. Returns the raw file path (e.g. `raw_<id>.webm`). Emits download % via `on_pct`.
+pub async fn download_native<F: FnMut(f64, String)>(
     app: &AppHandle,
     url: &str,
     vid: &str,
-    fmt: &str,
     dir: &Path,
     mut on_pct: F,
 ) -> Result<PathBuf, String> {
-    if let Some(p) = cache::cached_source(dir, vid, fmt) {
-        return Ok(p);
-    }
-    let out_tmpl = dir.join(format!("src_{vid}_{fmt}.%(ext)s"));
+    let out_tmpl = dir.join(format!("raw_{vid}.%(ext)s"));
+    let mut errbuf = String::new();
     let ok = sh::stream(
         app,
         "yt-dlp",
         vec![
             "-f".into(),
             "bestaudio/best".into(),
-            "-x".into(),
-            "--audio-format".into(),
-            fmt.into(),
-            "--audio-quality".into(),
-            "0".into(),
             "--no-playlist".into(),
             "--newline".into(),
             "-o".into(),
             out_tmpl.to_string_lossy().into_owned(),
             url.into(),
         ],
-        |line, _stderr| {
+        |line, is_err| {
             if let Some(c) = PCT_RE.captures(&line) {
                 if let Ok(p) = c[1].parse::<f64>() {
                     on_pct(p, line.trim().to_string());
                 }
             }
+            if is_err {
+                errbuf.push_str(&line);
+                errbuf.push('\n');
+            }
         },
     )
     .await?;
     if !ok {
-        return Err("audio download failed (yt-dlp). Try 'Update yt-dlp'.".into());
+        return Err(format!(
+            "audio download failed (yt-dlp):\n{}\nYouTube may have changed — a newer app build with an updated yt-dlp usually fixes it.",
+            sh::tail(&errbuf, 8)
+        ));
     }
-    cache::cached_source(dir, vid, fmt).ok_or_else(|| "download produced no file".into())
+    let prefix = format!("raw_{vid}.");
+    std::fs::read_dir(dir)
+        .ok()
+        .and_then(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
+                p.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with(&prefix)).unwrap_or(false)
+            })
+        })
+        .ok_or_else(|| "download produced no file".into())
 }
 
 /// Fetch the video thumbnail as a jpg into cache; returns its path.

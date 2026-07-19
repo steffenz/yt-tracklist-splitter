@@ -19,6 +19,7 @@ export interface VideoInfo {
   description: string;
   comments: Comment[];
   native_ext: string;
+  native_abr: number;
 }
 
 export interface Track {
@@ -57,6 +58,7 @@ export interface JobConfig {
   video_id: string;
   tracks: Track[];
   audio_format: string;
+  source_abr: number;
   album: string;
   album_artist: string;
   cover_mode: "none" | "youtube" | "custom";
