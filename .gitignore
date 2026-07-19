@@ -1,3 +1,17 @@
+# OS / local junk
 .DS_Store
 tracks.txt
 Downloads/
+old/
+
+# Node / frontend
+node_modules
+dist
+
+# Rust / Tauri build output
+src-tauri/target
+src-tauri/gen
+
+# Bundled sidecars are fetched via `npm run fetch-binaries`, not committed.
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep

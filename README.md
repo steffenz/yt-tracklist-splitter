@@ -1,174 +1,131 @@
 # 🎧 split-set
 
-Download a YouTube **DJ set** or **compilation** at the highest available audio
-quality and slice it into clean, tagged per-track files — with proper album art —
-ready to drop straight into Navidrome, Symfonium, Plex, or any music library.
+A small cross-platform **desktop app** (Tauri) that downloads a YouTube **DJ set /
+compilation** at the highest available audio quality and slices it into clean, tagged
+per-track files — with proper album art — ready to drop straight into Navidrome,
+Symfonium, Plex, or any music library.
 
-Built for the "one long mix, tracklist in the description" problem.
+Built for the "one long mix, tracklist in the description (or a comment)" problem — and
+now with a GUI so you can review and adjust everything **before** you run the job.
 
 ---
 
 ## What it does
 
-- **Highest quality, no waste.** Grabs the best audio stream YouTube offers
-  (usually ~160 kbps Opus) and, by default, **keeps it in its native format** —
-  no transcoding, no generation loss, no pointless FLAC bloat. Splitting is done
-  with `ffmpeg` stream-copy, so each track is a bit-exact slice of the source.
-- **Tracklist-driven splitting.** Cuts the set into tracks using a simple
-  `mm:ss - Title - Artist` tracklist. Bring your own file, or try to pull it from
-  the video description.
-- **Proper tags.** Every track gets title, artist, track number, **album**
-  (= the video title), and **album-artist** (= the channel).
-- **Album cover art.** Uses the video thumbnail, **center-cropped to a square**
-  (1000×1000) so it doesn't look stretched or letterboxed in music players.
-  Embeds it where reliable (m4a/mp3) **and** always drops a `cover.jpg` in the
-  album folder — which is the format-agnostic way that Navidrome and most players
-  actually read album art (important, since Opus embedded art is unreliable).
-- **Smart caching.** The downloaded source and thumbnail are cached in a
-  git-ignored `./.cache/` folder, keyed by video ID **and** quality profile.
-  Re-running (e.g. to tweak the tracklist) **won't re-download** the same set.
+- **Auto-finds the tracklist.** Scans the video **description and comments** and ranks
+  the blocks that look like a tracklist, resilient to the many real-world layouts
+  (`mm:ss - Title - Artist`, `mm:ss Artist - Title`, `[mm:ss] Title`, `1. mm:ss …`,
+  timestamp-at-end, …). Pick the right one, or paste your own — it parses live as you
+  type. Clear feedback when there are several candidates or none.
+- **Interactive album art.** Shows the video thumbnail with a **draggable, resizable
+  crop box** (default: centered square, 1000×1000). Or **drag-and-drop your own image**
+  anywhere in the window to use it instead.
+- **Highest quality, no waste.** Grabs the best audio stream YouTube offers (usually
+  ~160 kbps Opus) and, by default, **keeps it in its native format** — no transcoding,
+  no generation loss. Splitting is `ffmpeg` stream-copy, so each track is a bit-exact
+  slice of the source. Optional conversion to `m4a`/`mp3`/`opus`/`flac`/`wav` if you
+  need a specific format.
+- **Proper tags + cover.** Every track gets title, artist, track number, **album**
+  (= the video title), **album-artist** (= the channel). Cover art is embedded where
+  reliable (m4a/mp3) **and** always written as a folder `cover.jpg` — the
+  format-agnostic way Navidrome and most players actually read album art.
+- **You pick where it lands**, and it **doesn't leave a mess**: downloads are cached in
+  the OS app-cache directory (not your project), reused across re-runs, and cleanable
+  with one click.
 
 ---
 
 ## Requirements
 
-- Python 3.8+
-- [`yt-dlp`](https://github.com/yt-dlp/yt-dlp)
-- [`ffmpeg`](https://ffmpeg.org/) (includes `ffprobe`)
+Nothing to install to *use* the app — `yt-dlp` and `ffmpeg`/`ffprobe` are **bundled**.
 
-**macOS:**
-```bash
-brew install yt-dlp ffmpeg
-```
+To build from source you need:
 
-**Termux (Android):**
-```bash
-pkg install ffmpeg
-pip install -U yt-dlp
-```
-
-> Keep `yt-dlp` updated (`brew upgrade yt-dlp` / `yt-dlp -U`). Most "it suddenly
-> stopped working" issues are YouTube changing something and a stale yt-dlp — an
-> update fixes it the vast majority of the time.
+- [Rust](https://rustup.rs) (stable)
+- [Node.js](https://nodejs.org) 18+
+- Platform toolchain for Tauri v2 (Xcode CLT on macOS; `webkit2gtk-4.1` + build
+  essentials on Linux; MSVC + WebView2 on Windows — see the
+  [Tauri prerequisites](https://tauri.app/start/prerequisites/)).
 
 ---
 
-## Quick start
+## Run it (development)
 
 ```bash
-# 1. Make a tracklist (see format below), then:
-python3 split-set.py "https://youtu.be/VIDEO_ID" --tracklist tracks.txt --dry-run
-
-# 2. Happy with the parse? Drop --dry-run to actually download and split:
-python3 split-set.py "https://youtu.be/VIDEO_ID" --tracklist tracks.txt
+npm install
+npm run fetch-binaries   # download yt-dlp/ffmpeg/ffprobe sidecars for your OS
+npm run tauri dev
 ```
 
-Output lands in `Downloads/Albums/<album>/` (named after the video title), e.g.
-`Downloads/Albums/Artist @ Venue 2024/`, containing numbered, tagged tracks plus
-`cover.jpg`. The whole `Downloads/` folder is git-ignored automatically. Pass
-`-o/--outdir` to write somewhere else.
-
-Everything the script produces lives under `Downloads/`:
-
-```
-Downloads/            (git-ignored)
-├── Temporary/        cached source audio + thumbnails (reused across runs)
-└── Albums/
-    └── <album>/      finished split tracks + cover.jpg
-```
-
----
-
-## Tracklist format
-
-Default pattern is `mm:ss - Title - Artist` (hours optional):
-
-```
-0:00 - Intro - DJ Someone
-3:24 - Nightcall - Kavinsky
-7:10 - Midnight City - M83
-1:02:15 - Closing - Someone Else
-```
-
-- Each line's timestamp is the track **start**.
-- The next line's timestamp is where it **ends**.
-- The last track runs to the end of the file.
-- `-`, `–`, or `—` all work as separators.
-
-**Different layout?** Supply your own regex with named groups `ts`, `title`,
-`artist`. For example, if your tracklist is `mm:ss Artist - Title`:
+## Build an installer
 
 ```bash
-python3 split-set.py "<URL>" --tracklist tracks.txt \
-  --regex '(?P<ts>[\d:]+)\s+(?P<artist>.+?)\s+-\s+(?P<title>.+)'
+npm run fetch-binaries   # if you haven't already
+npm run tauri build
 ```
 
-> **Always `--dry-run` first.** It parses the tracklist and prints exactly what it
-> *would* cut, without downloading. Lines that don't match the pattern are
-> silently skipped — so dry-run is how you catch a format mismatch before spending
-> the download.
+Produces a native bundle for the current OS (`.dmg`/`.app` on macOS, `.msi` on Windows,
+`.AppImage`/`.deb` on Linux) under `src-tauri/target/release/bundle/`.
+
+> **Sidecars are not committed.** The `yt-dlp`, `ffmpeg`, and `ffprobe` binaries are
+> downloaded on demand by `npm run fetch-binaries` into `src-tauri/binaries/`,
+> named `<tool>-<target-triple>` as Tauri expects. The script auto-detects your OS/arch;
+> re-run it any time to refresh yt-dlp. Pass a target key to fetch another platform's set
+> (e.g. `node scripts/fetch-binaries.mjs win32-x64`).
+
+## Releasing (DMG / MSI / AppImage via GitHub Actions)
+
+Installers are built on GitHub's runners, not your machine — [`.github/workflows/release.yml`](.github/workflows/release.yml)
+builds macOS (Apple Silicon + Intel), Windows, and Linux in parallel and attaches the
+bundles to a **draft GitHub Release**.
+
+1. Bump `version` in `src-tauri/tauri.conf.json`.
+2. Push a tag: `git tag v0.1.0 && git push origin v0.1.0` (or run the workflow manually
+   from the **Actions** tab).
+3. Review the draft Release it creates and publish it.
+
+Each runner fetches its own sidecars, so nothing binary lives in the repo. Builds are
+**unsigned** — macOS users right-click → *Open* on first launch (or add Apple signing
+secrets + notarization to the workflow later).
 
 ---
 
-## Options
+## Using it
 
-| Flag | Description |
-|------|-------------|
-| `--tracklist FILE` | Read the tracklist from a file (reliable). |
-| `--from-description` | Try to pull the tracklist from the video description. *(Won't catch timestamps that live in a **comment** — use a file for those.)* |
-| `--regex PATTERN` | Custom named-group regex (`ts`, `title`, `artist`). |
-| `--audio-format FMT` | Force a format (`m4a`, `mp3`, `opus`, `flac`…). **Default: keep the source's native format** (recommended). |
-| `-o, --outdir DIR` | Output directory (default: `Downloads/Albums/<album>`). |
-| `--album NAME` | Override the album name (default: the video title). |
-| `--no-cover` | Skip fetching/embedding the thumbnail. |
-| `--no-crop` | Keep the 16:9 thumbnail instead of square-cropping it. |
-| `--keep-full` | Also save the full, unsplit set in the output folder. |
-| `--clean-cache` | Delete this video's cached files after a successful run. |
-| `--dry-run` | Parse the tracklist and print it; download nothing. |
+1. **Paste a URL** and hit *Fetch*. The app pulls video info + comments and shows the
+   thumbnail.
+2. **Pick a tracklist** from the detected candidates (or paste/edit your own). Toggle
+   "Artist appears before title" if the layout is `Artist - Title`; drop to a custom
+   regex (named groups `ts`, `title`, `artist`) for anything exotic.
+3. **Adjust the cover** crop, or drag in your own image. Toggle square vs. free crop, or
+   choose *No cover art*.
+4. **Set options** — format, album/album-artist overrides, keep-full, and the output
+   folder.
+5. **Split it.** Watch live progress; *Reveal in Finder/Explorer* when done.
 
----
-
-## Caching
-
-Downloads and thumbnails are cached in `Downloads/Temporary/`, named by video ID
-and quality profile (e.g. `src_dQw4w9WgXcQ_opus.opus`). Consequences:
-
-- Re-running to tweak a tracklist **re-splits from cache** — no second download.
-- Requesting a **different** quality profile (e.g. forcing `mp3`) is a different
-  cache key, so it fetches fresh.
-- Everything the script writes lives under `Downloads/`, which is git-ignored
-  automatically (a nested `Downloads/.gitignore` plus a `Downloads/` entry in your
-  top-level `.gitignore`), so neither cached audio nor finished tracks get
-  committed. The cache is **visible** (not a hidden dot-folder) on purpose — set
-  files are large, so you can see and prune them by hand.
-- Cache is **kept by default**. Use `--clean-cache` for a one-off run you don't
-  want to keep the source of.
+Output lands in `<your folder>/<album>/`, containing numbered, tagged tracks plus
+`cover.jpg`.
 
 ---
 
 ## Notes on quality
 
-YouTube's best audio is roughly **160 kbps Opus** — there is no lossless or
-higher tier for normal videos. So:
-
-- **Native format is best.** Keeping the source Opus means zero re-encoding loss.
-  Forcing FLAC gains you *nothing* (you can't restore quality lossy compression
-  already discarded) and just makes bigger files.
-- If you need a specific format for compatibility, `--audio-format m4a` (AAC) is a
-  reasonable lossy choice; avoid lossless formats for YouTube sources.
-
----
+YouTube's best audio is roughly **160 kbps Opus** — there is no lossless tier for normal
+videos. **Native format is best** (zero re-encoding loss); forcing FLAC gains you nothing
+and just makes bigger files. If you need compatibility, `m4a` (AAC) is a reasonable lossy
+choice.
 
 ## Album art & Navidrome
 
-The reliable path is the **folder `cover.jpg`**, which this script always writes.
-If Navidrome doesn't show it:
+The reliable path is the folder **`cover.jpg`**, which the app always writes. If Navidrome
+doesn't show it: trigger a full rescan, and set `ND_COVERARTPRIORITY` to prefer external
+files (e.g. `cover.*, folder.*, front.*, embedded`).
 
-1. Trigger a **full rescan** — art changes often aren't picked up incrementally.
-2. Check `ND_COVERARTPRIORITY` prefers external files over `embedded`
-   (e.g. `cover.*, folder.*, front.*, embedded`) so a good `cover.jpg` isn't
-   overridden by unreliable Opus embedded art.
-3. Make sure Navidrome can read the file (permissions, especially in Docker).
+## Keeping yt-dlp fresh
+
+Most "it suddenly stopped working" issues are YouTube changing something and a stale
+`yt-dlp`. Use the **Update yt-dlp** button (works for local/dev builds); for signed
+release builds, update by reinstalling the app.
 
 ---
 
