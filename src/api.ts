@@ -84,9 +84,13 @@ export const api = {
   parse: (text: string, opts: ParseOptions) => invoke<Track[]>("parse_tracklist", { text, opts }),
   getThumbnail: (url: string, videoId: string) =>
     invoke<string>("get_thumbnail", { url, videoId }),
+  preparePreview: (url: string, videoId: string) =>
+    invoke<string>("prepare_preview", { url, videoId }),
+  cachedPreview: (videoId: string) => invoke<string | null>("cached_preview", { videoId }),
   defaultOutputDir: (album: string) => invoke<string>("default_output_dir", { album }),
   ytdlpVersion: () => invoke<string>("ytdlp_version"),
   clearCache: () => invoke<number>("clear_cache"),
+  cacheSize: () => invoke<number>("cache_size"),
   cancel: () => invoke<void>("cancel_job"),
   runJob: (cfg: JobConfig) => invoke<string>("run_job", { cfg }),
 };

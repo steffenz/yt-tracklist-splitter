@@ -29,9 +29,12 @@ pub fn run() {
             commands::detect_tracklists,
             commands::parse_tracklist,
             commands::get_thumbnail,
+            commands::prepare_preview,
+            commands::cached_preview,
             commands::default_output_dir,
             commands::ytdlp_version,
             commands::clear_cache,
+            commands::cache_size,
             commands::cancel_job,
             commands::run_job,
         ])

@@ -75,6 +75,64 @@ pub async fn ytdlp_version(app: AppHandle) -> Result<String, String> {
     ytdlp::version(&app).await
 }
 
+/// Download the native audio (if not cached) and normalize it. Shared by the preview
+/// button and the split job, so preparing a preview also warms the cache and makes the
+/// subsequent split skip the download entirely.
+async fn ensure_source(
+    app: &AppHandle,
+    url: &str,
+    vid: &str,
+    dir: &std::path::Path,
+) -> Result<PathBuf, String> {
+    if let Some(p) = cache::cached_source(dir, vid, "native") {
+        return Ok(p);
+    }
+    let app2 = app.clone();
+    let raw = ytdlp::download_native(app, url, vid, dir, |pct, line| {
+        emit_progress(&app2, "download", &line, 0, 0, pct);
+    })
+    .await?;
+    emit_progress(app, "download", "Preparing source…", 0, 0, 100.0);
+    let native = media::normalize_source(app, &raw, vid, dir).await?;
+    let _ = fs::remove_file(&raw);
+    Ok(native)
+}
+
+/// Fetch (and cache) the audio, then produce a playable preview file. Returns its path.
+#[tauri::command]
+pub async fn prepare_preview(app: AppHandle, url: String, video_id: String) -> Result<String, String> {
+    let dir = cache::cache_dir(&app)?;
+    let cached = cache::cached_source(&dir, &video_id, "native").is_some();
+    log(&app, if cached { ">> using cached audio" } else { ">> downloading audio…" });
+    emit_progress(&app, "download", "Downloading audio…", 0, 0, 0.0);
+    let source = ensure_source(&app, url.trim(), &video_id, &dir).await?;
+
+    log(&app, ">> converting to preview format…");
+    emit_progress(&app, "preview", "Converting to preview format…", 0, 0, 0.0);
+    let app2 = app.clone();
+    let preview = media::make_preview(&app, &source, &video_id, &dir, |pct| {
+        emit_progress(&app2, "preview", "Converting to preview format…", 0, 0, pct);
+    })
+    .await?;
+    log(&app, ">> preview ready (audio cached — the split will reuse it)");
+    Ok(preview.to_string_lossy().into_owned())
+}
+
+/// Path to an already-prepared preview, if one exists (so we can auto-load it).
+#[tauri::command]
+pub fn cached_preview(app: AppHandle, video_id: String) -> Result<Option<String>, String> {
+    let dir = cache::cache_dir(&app)?;
+    let p = dir.join(format!("preview_{video_id}.m4a"));
+    Ok(if p.exists() { Some(p.to_string_lossy().into_owned()) } else { None })
+}
+
+/// Total bytes currently held in the cache (shown next to "Clear cache").
+#[tauri::command]
+pub fn cache_size(app: AppHandle) -> Result<u64, String> {
+    let dir = cache::cache_dir(&app)?;
+    Ok(cache::total_size(&dir))
+}
+
 #[tauri::command]
 pub fn clear_cache(app: AppHandle) -> Result<usize, String> {
     let dir = cache::cache_dir(&app)?;
@@ -106,23 +164,13 @@ pub async fn run_job(
 
     // 1. Download native audio once (cached), then normalize with our bundled ffmpeg.
     emit_progress(&app, "download", "Fetching audio…", 0, 0, 0.0);
-    let source = if let Some(p) = cache::cached_source(&dir, &cfg.video_id, "native") {
-        log(&app, ">> using cached source");
-        p
-    } else {
-        let app2 = app.clone();
-        let raw = ytdlp::download_native(&app, &cfg.url, &cfg.video_id, &dir, |pct, line| {
-            emit_progress(&app2, "download", &line, 0, 0, pct);
-        })
-        .await?;
-        if cancelled() {
-            let _ = fs::remove_file(&raw);
-            return Err("Cancelled.".into());
-        }
-        emit_progress(&app, "download", "Preparing source…", 0, 0, 100.0);
-        let native = media::normalize_source(&app, &raw, &cfg.video_id, &dir).await?;
-        let _ = fs::remove_file(&raw);
-        native
+    let had_cache = cache::cached_source(&dir, &cfg.video_id, "native").is_some();
+    if had_cache {
+        log(&app, ">> using cached source (no download needed)");
+    }
+    let source = match ensure_source(&app, &cfg.url, &cfg.video_id, &dir).await {
+        Ok(p) => p,
+        Err(e) => return Err(if cancelled() { "Cancelled.".into() } else { e }),
     };
     if cancelled() {
         return Err("Cancelled.".into());

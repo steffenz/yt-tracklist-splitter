@@ -211,6 +211,23 @@ signature.) For local development, just re-run `npm run fetch-binaries`.
 
 ---
 
+## Roadmap / known limitations
+
+- **The video preview is a YouTube embed**, which requires a real `http://` origin and is
+  subject to YouTube's embedding rules. Some videos disallow embedding outright (player
+  errors 101/150), and the embed can break whenever those rules change — it's inherently
+  a moving target.
+- **Planned: a self-sufficient preview.** Play the *already-downloaded* native audio
+  locally (the same cached file the splitter uses), with the chapter list as seek markers.
+  Previewing would then warm the cache, making the subsequent split instant — no second
+  download. Immune to embed policy, origin checks, and offline-safe.
+- **Planned: optional low-res video fetch.** After the audio, optionally pull a low-res
+  video stream for a real visual preview, for people who want the picture.
+- **Planned: GIF/clip slicer.** Cut short clips or GIFs from the set. This *requires* a
+  real local video file — frames can't be extracted from an embedded player — so it
+  depends on the optional video fetch above. If the tool grows beyond tracklist splitting,
+  a rename (e.g. `yt-slicer`) probably makes sense.
+
 ## License
 
 Personal utility — use and modify freely, subject to the **Personal use only** note at

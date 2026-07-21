@@ -48,6 +48,11 @@ pub fn clean_thumbraw(dir: &Path, vid: &str) {
     }
 }
 
+/// Total bytes currently held in the cache.
+pub fn total_size(dir: &Path) -> u64 {
+    entries(dir).iter().filter_map(|p| fs::metadata(p).ok()).map(|m| m.len()).sum()
+}
+
 pub fn clear_all(dir: &Path) -> usize {
     let mut n = 0;
     for p in entries(dir) {

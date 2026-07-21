@@ -1,10 +1,9 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, onLog, onProgress, type JobConfig, type Track, type TracklistCandidate, type VideoInfo } from "./api";
 import { CropBox } from "./crop";
-import { mountPlayer, seekTo } from "./yt";
 import "./styles.css";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -14,7 +13,9 @@ app.innerHTML = /* html */ `
     <div class="brand">🎧 <b>yt-tracklist-splitter</b> <span class="sub">DJ set / compilation splitter</span></div>
     <div class="tools">
       <span id="ytdlpVer" class="ver">yt-dlp …</span>
-      <button id="btnClearCache" class="ghost" title="Delete all cached downloads">Clear cache</button>
+      <button id="btnClearCache" class="ghost" title="Delete all cached downloads and start over">
+        Clear cache <span id="cacheSize" class="badge">—</span>
+      </button>
     </div>
   </header>
 
@@ -36,7 +37,30 @@ app.innerHTML = /* html */ `
         <div id="candidates" class="candidates"></div>
         <div class="preview-grid">
           <div class="preview-video">
-            <div id="ytPlayer" class="ytplayer"><div class="ytph">Video preview loads after fetching…</div></div>
+            <div id="previewIdle" class="preview-idle">
+              <button id="btnPrepare" class="primary">⬇ Download audio for preview</button>
+              <p class="hint">Fetches the source audio once and caches it — the split afterwards
+                reuses the same file, so there's no second download. A small mono copy is then
+                made for fast in-app scrubbing; your split tracks still come from the
+                full-quality source.</p>
+            </div>
+            <div id="previewBusy" class="preview-busy hidden">
+              <div class="spinrow"><span class="spin"></span><span id="prepMsg">Starting…</span></div>
+              <div class="bar"><div id="prepBar" class="fill"></div></div>
+            </div>
+            <div id="previewPane" class="preview-pane hidden">
+              <div class="transport">
+                <button id="btnPlay" class="playbtn" title="Play / pause">▶</button>
+                <span class="time"><span id="curTime">0:00</span> <span class="muted">/</span> <span id="durTime">0:00</span></span>
+                <span id="nowPlaying" class="nowplaying muted">—</span>
+              </div>
+              <div id="timeline" class="timeline" title="Click to scrub"></div>
+              <p class="previewnote">
+                ℹ︎ This preview is a reduced-quality mono copy, made small so it converts
+                quickly for scrubbing. Your split tracks are cut from the full-quality
+                source and will sound better.
+              </p>
+            </div>
           </div>
           <div class="tl-right">
             <label class="lbl">Chapters — <span id="trackCount">0</span> tracks <span class="muted">(click a row to jump)</span></label>
@@ -157,6 +181,8 @@ const logEl = $<HTMLPreElement>("#log");
 // ---- app state ---------------------------------------------------------------
 let info: VideoInfo | null = null;
 let tracks: Track[] = [];
+let preparingPreview = false;
+const audio = new Audio();
 let coverMode: "youtube" | "custom" | "none" = "youtube";
 let customImagePath: string | null = null;
 let lastOutdir: string | null = null;
@@ -193,11 +219,50 @@ const logLine = (msg: string) => {
 
 // ---- yt-dlp version + maintenance -------------------------------------------
 api.ytdlpVersion().then((v) => ($("#ytdlpVer").textContent = `yt-dlp ${v}`)).catch(() => {});
+const fmtBytes = (b: number) => {
+  if (b <= 0) return "empty";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = b;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+};
+
+async function refreshCacheSize() {
+  try {
+    $("#cacheSize").textContent = fmtBytes(await api.cacheSize());
+  } catch {
+    /* ignore */
+  }
+}
+refreshCacheSize();
+
 $("#btnClearCache").addEventListener("click", async () => {
+  const size = await api.cacheSize().catch(() => 0);
+  const ok = await confirm(
+    `Delete all cached downloads (${fmtBytes(size)})?\n\n` +
+      `This removes downloaded audio, previews and thumbnails, and resets the app. ` +
+      `Anything you open again will be re-downloaded. Already-split tracks are not affected.`,
+    { title: "Clear cache", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" }
+  );
+  if (!ok) return;
   const n = await api.clearCache();
-  setStatus(`Cleared ${n} cached file(s).`, "ok");
-  logLine(`Cleared ${n} cached file(s)`);
+  resetToStart();
+  await refreshCacheSize();
+  setStatus(`Cleared ${n} cached file(s) — starting fresh.`, "ok");
+  logLine(`Cleared ${n} cached file(s) (${fmtBytes(size)}) — app reset`);
 });
+
+/** Back to a blank slate: clears the URL, hides the workspace, resets all per-video state. */
+function resetToStart() {
+  resetUI();
+  urlEl.value = "";
+  workArea.classList.add("hidden");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 $("#btnClearLog").addEventListener("click", () => (logEl.textContent = ""));
 logLine("Ready. Paste a YouTube URL and hit Fetch.");
 
@@ -228,7 +293,15 @@ function resetUI() {
   outdirEl.value = "";
   formatEl.innerHTML = "";
   $("#formatHint").textContent = "";
-  $("#ytPlayer").innerHTML = `<div class="ytph">Loading preview…</div>`;
+  // reset the audio preview
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+  previewState("idle");
+  timelineEl.innerHTML = "";
+  curTimeEl.textContent = "0:00";
+  durTimeEl.textContent = "0:00";
+  nowPlayingEl.textContent = "—";
   crop.setImage("");
   btnReveal.classList.add("hidden");
   progressWrap.classList.add("hidden");
@@ -265,11 +338,14 @@ async function doFetch() {
   workArea.scrollIntoView({ behavior: "smooth", block: "start" });
   await loadYoutubeThumb();
   await detect();
-  // Load the video preview (network; non-blocking).
-  logLine("Loading video preview…");
-  mountPlayer($("#ytPlayer"), info.id)
-    .then(() => logLine("Video preview ready"))
-    .catch((e) => logLine(`Video preview unavailable: ${e}`));
+  // If this video's audio was already prepared, load the preview straight away.
+  const cached = await api.cachedPreview(info.id).catch(() => null);
+  if (cached) {
+    loadPreview(cached);
+    logLine("Cached audio found — preview ready");
+  } else {
+    previewState("idle");
+  }
 }
 
 function srcBitrate(v: VideoInfo): string {
@@ -389,6 +465,125 @@ async function reparse() {
         }</li>`
     )
     .join("");
+  renderTimeline();
+}
+
+// ---- step 2b: local audio preview -------------------------------------------
+const previewIdle = $("#previewIdle");
+const previewBusy = $("#previewBusy");
+const previewPane = $("#previewPane");
+const prepBar = $("#prepBar");
+const prepMsg = $("#prepMsg");
+const btnPlay = $<HTMLButtonElement>("#btnPlay");
+const timelineEl = $("#timeline");
+const curTimeEl = $("#curTime");
+const durTimeEl = $("#durTime");
+const nowPlayingEl = $("#nowPlaying");
+
+function previewState(s: "idle" | "busy" | "ready") {
+  previewIdle.classList.toggle("hidden", s !== "idle");
+  previewBusy.classList.toggle("hidden", s !== "busy");
+  previewPane.classList.toggle("hidden", s !== "ready");
+}
+
+function seekTo(seconds: number) {
+  if (!audio.getAttribute("src")) return;
+  audio.currentTime = Math.max(0, seconds);
+  audio.play().catch(() => {});
+}
+
+function loadPreview(path: string) {
+  audio.src = convertFileSrc(path);
+  audio.load();
+  previewState("ready");
+  renderTimeline();
+}
+
+$("#btnPrepare").addEventListener("click", doPreparePreview);
+
+async function doPreparePreview() {
+  if (!info) return;
+  preparingPreview = true;
+  previewState("busy");
+  prepBar.style.width = "2%";
+  prepMsg.textContent = "Downloading audio…";
+  logLine("Downloading audio for preview…");
+  try {
+    const path = await api.preparePreview(urlEl.value.trim(), info.id);
+    loadPreview(path);
+    await refreshCacheSize();
+  } catch (e) {
+    previewState("idle");
+    setStatus(String(e), "err");
+    logLine(`ERROR: ${e}`);
+  } finally {
+    preparingPreview = false;
+  }
+}
+
+btnPlay.addEventListener("click", () => (audio.paused ? audio.play() : audio.pause()));
+audio.addEventListener("play", () => (btnPlay.textContent = "❚❚"));
+audio.addEventListener("pause", () => (btnPlay.textContent = "▶"));
+audio.addEventListener("loadedmetadata", () => {
+  durTimeEl.textContent = hms(audio.duration);
+  renderTimeline();
+});
+audio.addEventListener("timeupdate", updatePlayhead);
+
+// Click anywhere on the timeline to scrub.
+timelineEl.addEventListener("click", (e) => {
+  const dur = previewDuration();
+  if (!dur) return;
+  const r = timelineEl.getBoundingClientRect();
+  seekTo(((e.clientX - r.left) / r.width) * dur);
+});
+
+function previewDuration(): number {
+  return Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : info?.duration ?? 0;
+}
+
+/** Draw each track as a block on the timeline, so chapters are visible and clickable. */
+function renderTimeline() {
+  const dur = previewDuration();
+  if (!dur) {
+    timelineEl.innerHTML = "";
+    return;
+  }
+  const segs = tracks
+    .map((t, i) => {
+      const end = i + 1 < tracks.length ? tracks[i + 1].start : dur;
+      const left = (t.start / dur) * 100;
+      const width = Math.max(0.2, ((end - t.start) / dur) * 100);
+      const label = `${hms(t.start)} — ${t.title || "(untitled)"}${t.artist ? ` · ${t.artist}` : ""}`;
+      return `<div class="seg${i % 2 ? " alt" : ""}" data-i="${i}" style="left:${left}%;width:${width}%" title="${escapeHtml(label)}"></div>`;
+    })
+    .join("");
+  timelineEl.innerHTML = `${segs}<div id="tlFill" class="tl-fill"></div><div id="tlHead" class="tl-head"></div>`;
+  updatePlayhead();
+}
+
+function updatePlayhead() {
+  const dur = previewDuration();
+  const fill = document.querySelector<HTMLElement>("#tlFill");
+  const head = document.querySelector<HTMLElement>("#tlHead");
+  if (!dur || !fill || !head) return;
+  const pct = Math.min(100, (audio.currentTime / dur) * 100);
+  fill.style.width = `${pct}%`;
+  head.style.left = `${pct}%`;
+  curTimeEl.textContent = hms(audio.currentTime);
+
+  let idx = -1;
+  for (let i = 0; i < tracks.length; i++) if (audio.currentTime >= tracks[i].start) idx = i;
+  timelineEl.querySelectorAll(".seg.active").forEach((s) => s.classList.remove("active"));
+  previewEl.querySelectorAll("li.active").forEach((li) => li.classList.remove("active"));
+  if (idx >= 0) {
+    timelineEl.querySelector(`.seg[data-i="${idx}"]`)?.classList.add("active");
+    previewEl.children[idx]?.classList.add("active");
+    const t = tracks[idx];
+    nowPlayingEl.textContent = `${t.title || "(untitled)"}${t.artist ? ` — ${t.artist}` : ""}`;
+  } else {
+    nowPlayingEl.textContent = "—";
+  }
 }
 
 // ---- step 3: cover -----------------------------------------------------------
@@ -451,6 +646,14 @@ $("#btnPickDir").addEventListener("click", async () => {
 
 // ---- step 5: run -------------------------------------------------------------
 onProgress((p) => {
+  // While preparing a preview, drive the inline preview bar instead of the run bar.
+  if (preparingPreview) {
+    const label = p.stage === "preview" ? "Converting to preview format" : "Downloading audio";
+    prepBar.style.width = `${Math.max(2, p.pct)}%`;
+    prepBar.classList.toggle("indeterminate", p.pct <= 0);
+    prepMsg.textContent = p.pct > 0 ? `${label}… ${Math.round(p.pct)}%` : `${label}…`;
+    return;
+  }
   progressWrap.classList.remove("hidden");
   bar.style.width = `${Math.max(2, p.pct)}%`;
   bar.classList.toggle("indeterminate", p.stage === "download" && p.pct === 0);
@@ -500,6 +703,7 @@ async function runJob() {
     progressMsg.textContent = "Done ✓";
     btnReveal.classList.remove("hidden");
     setStatus(`Done — ${tracks.length} tracks written.`, "ok");
+    await refreshCacheSize();
   } catch (e) {
     const msg = String(e);
     bar.classList.remove("indeterminate");
