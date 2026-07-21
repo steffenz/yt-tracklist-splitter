@@ -86,6 +86,14 @@ pub struct JobConfig {
 }
 
 #[derive(Serialize, Clone, Debug)]
+pub struct PreviewInfo {
+    pub path: String,
+    /// True only when the preview had to be re-encoded (mono, reduced quality). A
+    /// stream-copied preview is bit-exact, so the UI can skip the quality warning.
+    pub encoded: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
     pub stage: String,

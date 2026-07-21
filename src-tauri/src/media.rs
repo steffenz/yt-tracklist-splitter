@@ -66,11 +66,13 @@ pub async fn make_preview<F: FnMut(f64)>(
     src: &Path,
     vid: &str,
     dir: &Path,
+    force_encode: bool,
     mut on_pct: F,
 ) -> Result<PathBuf, String> {
     let out = dir.join(format!("preview_{vid}.m4a"));
+    let caf = dir.join(format!("preview_{vid}.caf"));
     if out.exists() {
-        return Ok(out);
+        return Ok(out); // a known-good encode already exists
     }
 
     // Already AAC → stream-copy, which is effectively instant.
@@ -83,6 +85,24 @@ pub async fn make_preview<F: FnMut(f64)>(
         }
         return Ok(out);
     }
+
+    // Opus source: first try a stream-copy into CAF. That's instant (~0.07s vs ~18s for a
+    // 70-min encode) AND keeps full stereo quality, because nothing is re-encoded.
+    // CoreAudio decodes Opus-in-CAF, but if the webview refuses it the frontend re-asks
+    // with force_encode and we fall back to the mono AAC below.
+    if !force_encode {
+        if caf.exists() {
+            return Ok(caf);
+        }
+        let (ok, _o, _e) =
+            sh::capture(app, "ffmpeg", preview_cmd(src, &caf, vec!["-c:a".into(), "copy".into()], false))
+                .await?;
+        if ok {
+            return Ok(caf);
+        }
+        let _ = std::fs::remove_file(&caf);
+    }
+    let _ = std::fs::remove_file(&caf); // falling back: the CAF is dead weight
 
     // Otherwise encode a small mono preview. Measured on an M-series Mac: the native
     // `aac` encoder runs ~101x realtime, Apple's AudioToolbox `aac_at` ~140x, and mono

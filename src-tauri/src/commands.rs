@@ -1,6 +1,8 @@
 //! Tauri commands invoked from the frontend.
 
-use crate::types::{JobConfig, ParseOptions, Progress, Track, TracklistCandidate, VideoInfo};
+use crate::types::{
+    JobConfig, ParseOptions, PreviewInfo, Progress, Track, TracklistCandidate, VideoInfo,
+};
 use crate::{cache, media, tracklist, ytdlp, AppState};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -100,30 +102,57 @@ async fn ensure_source(
 
 /// Fetch (and cache) the audio, then produce a playable preview file. Returns its path.
 #[tauri::command]
-pub async fn prepare_preview(app: AppHandle, url: String, video_id: String) -> Result<String, String> {
+pub async fn prepare_preview(
+    app: AppHandle,
+    url: String,
+    video_id: String,
+    force_encode: bool,
+) -> Result<PreviewInfo, String> {
     let dir = cache::cache_dir(&app)?;
     let cached = cache::cached_source(&dir, &video_id, "native").is_some();
     log(&app, if cached { ">> using cached audio" } else { ">> downloading audio…" });
     emit_progress(&app, "download", "Downloading audio…", 0, 0, 0.0);
     let source = ensure_source(&app, url.trim(), &video_id, &dir).await?;
 
-    log(&app, ">> converting to preview format…");
-    emit_progress(&app, "preview", "Converting to preview format…", 0, 0, 0.0);
+    emit_progress(&app, "preview", "Preparing preview…", 0, 0, 0.0);
     let app2 = app.clone();
-    let preview = media::make_preview(&app, &source, &video_id, &dir, |pct| {
+    let preview = media::make_preview(&app, &source, &video_id, &dir, force_encode, |pct| {
         emit_progress(&app2, "preview", "Converting to preview format…", 0, 0, pct);
     })
     .await?;
-    log(&app, ">> preview ready (audio cached — the split will reuse it)");
-    Ok(preview.to_string_lossy().into_owned())
+    let encoded = is_encoded(&preview, &source);
+    log(
+        &app,
+        if encoded {
+            ">> preview converted (audio cached — the split will reuse it)"
+        } else {
+            ">> preview ready instantly, full quality (audio cached — the split will reuse it)"
+        },
+    );
+    Ok(PreviewInfo { path: preview.to_string_lossy().into_owned(), encoded })
 }
 
-/// Path to an already-prepared preview, if one exists (so we can auto-load it).
+/// A preview is "encoded" (quality-reduced) only when we re-encoded an Opus source into
+/// m4a. Stream-copied previews (.caf, or m4a from an AAC source) are bit-exact.
+fn is_encoded(preview: &std::path::Path, source: &std::path::Path) -> bool {
+    preview.extension().and_then(|e| e.to_str()) == Some("m4a")
+        && media::source_codec(source) != "aac"
+}
+
+/// An already-prepared preview, if one exists (so we can auto-load it). Prefers a
+/// previously-encoded m4a, since its playability is already proven on this machine.
 #[tauri::command]
-pub fn cached_preview(app: AppHandle, video_id: String) -> Result<Option<String>, String> {
+pub fn cached_preview(app: AppHandle, video_id: String) -> Result<Option<PreviewInfo>, String> {
     let dir = cache::cache_dir(&app)?;
-    let p = dir.join(format!("preview_{video_id}.m4a"));
-    Ok(if p.exists() { Some(p.to_string_lossy().into_owned()) } else { None })
+    let source = cache::cached_source(&dir, &video_id, "native");
+    for ext in ["m4a", "caf"] {
+        let p = dir.join(format!("preview_{video_id}.{ext}"));
+        if p.exists() {
+            let encoded = source.as_deref().map(|s| is_encoded(&p, s)).unwrap_or(false);
+            return Ok(Some(PreviewInfo { path: p.to_string_lossy().into_owned(), encoded }));
+        }
+    }
+    Ok(None)
 }
 
 /// Total bytes currently held in the cache (shown next to "Clear cache").

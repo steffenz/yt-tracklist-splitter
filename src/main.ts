@@ -2,7 +2,16 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { api, onLog, onProgress, type JobConfig, type Track, type TracklistCandidate, type VideoInfo } from "./api";
+import {
+  api,
+  onLog,
+  onProgress,
+  type JobConfig,
+  type PreviewInfo,
+  type Track,
+  type TracklistCandidate,
+  type VideoInfo,
+} from "./api";
 import { CropBox } from "./crop";
 import "./styles.css";
 
@@ -40,9 +49,9 @@ app.innerHTML = /* html */ `
             <div id="previewIdle" class="preview-idle">
               <button id="btnPrepare" class="primary">⬇ Download audio for preview</button>
               <p class="hint">Fetches the source audio once and caches it — the split afterwards
-                reuses the same file, so there's no second download. A small mono copy is then
-                made for fast in-app scrubbing; your split tracks still come from the
-                full-quality source.</p>
+                reuses the same file, so there's no second download. Playback normally uses the
+                original audio as-is; if this system can't play it, a smaller copy is made
+                automatically.</p>
             </div>
             <div id="previewBusy" class="preview-busy hidden">
               <div class="spinrow"><span class="spin"></span><span id="prepMsg">Starting…</span></div>
@@ -55,10 +64,10 @@ app.innerHTML = /* html */ `
                 <span id="nowPlaying" class="nowplaying muted">—</span>
               </div>
               <div id="timeline" class="timeline" title="Click to scrub"></div>
-              <p class="previewnote">
-                ℹ︎ This preview is a reduced-quality mono copy, made small so it converts
-                quickly for scrubbing. Your split tracks are cut from the full-quality
-                source and will sound better.
+              <p id="previewNote" class="previewnote hidden">
+                ℹ︎ This preview had to be re-encoded to a reduced-quality mono copy so it
+                plays here. Your split tracks are cut from the full-quality source and
+                will sound better.
               </p>
             </div>
           </div>
@@ -346,6 +355,7 @@ async function doFetch() {
   } else {
     previewState("idle");
   }
+  await refreshCacheSize();
 }
 
 function srcBitrate(v: VideoInfo): string {
@@ -492,25 +502,44 @@ function seekTo(seconds: number) {
   audio.play().catch(() => {});
 }
 
-function loadPreview(path: string) {
-  audio.src = convertFileSrc(path);
+// The fast path stream-copies Opus into a .caf (instant, full quality). CoreAudio decodes
+// it, but if this webview refuses we fall back to an encoded preview — and remember that,
+// so we don't retry the fast path on every video.
+const CAF_UNSUPPORTED = "cafUnsupported";
+let cafWatchdog: number | undefined;
+
+function loadPreview(p: PreviewInfo) {
+  clearTimeout(cafWatchdog);
+  audio.src = convertFileSrc(p.path);
   audio.load();
   previewState("ready");
+  $("#previewNote").classList.toggle("hidden", !p.encoded);
   renderTimeline();
+  if (p.path.endsWith(".caf")) {
+    // If metadata never arrives, the format isn't playable here — fall back.
+    cafWatchdog = window.setTimeout(() => fallbackToEncoded("no response"), 6000);
+  }
 }
 
-$("#btnPrepare").addEventListener("click", doPreparePreview);
+async function fallbackToEncoded(why: string) {
+  clearTimeout(cafWatchdog);
+  if (!info || preparingPreview) return;
+  localStorage.setItem(CAF_UNSUPPORTED, "1");
+  logLine(`Instant preview format not playable here (${why}) — converting instead (one-time)`);
+  await runPrepare(true);
+}
 
-async function doPreparePreview() {
+$("#btnPrepare").addEventListener("click", () => runPrepare(localStorage.getItem(CAF_UNSUPPORTED) === "1"));
+
+async function runPrepare(forceEncode: boolean) {
   if (!info) return;
   preparingPreview = true;
   previewState("busy");
   prepBar.style.width = "2%";
-  prepMsg.textContent = "Downloading audio…";
-  logLine("Downloading audio for preview…");
+  prepMsg.textContent = forceEncode ? "Converting to preview format…" : "Downloading audio…";
   try {
-    const path = await api.preparePreview(urlEl.value.trim(), info.id);
-    loadPreview(path);
+    const p = await api.preparePreview(urlEl.value.trim(), info.id, forceEncode);
+    loadPreview(p);
     await refreshCacheSize();
   } catch (e) {
     previewState("idle");
@@ -525,8 +554,12 @@ btnPlay.addEventListener("click", () => (audio.paused ? audio.play() : audio.pau
 audio.addEventListener("play", () => (btnPlay.textContent = "❚❚"));
 audio.addEventListener("pause", () => (btnPlay.textContent = "▶"));
 audio.addEventListener("loadedmetadata", () => {
+  clearTimeout(cafWatchdog); // it plays — no fallback needed
   durTimeEl.textContent = hms(audio.duration);
   renderTimeline();
+});
+audio.addEventListener("error", () => {
+  if ((audio.getAttribute("src") || "").includes(".caf")) fallbackToEncoded("unsupported format");
 });
 audio.addEventListener("timeupdate", updatePlayhead);
 

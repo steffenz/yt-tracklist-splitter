@@ -70,6 +70,12 @@ export interface JobConfig {
   outdir: string;
 }
 
+export interface PreviewInfo {
+  path: string;
+  /** True only when the preview was re-encoded (mono, reduced quality). */
+  encoded: boolean;
+}
+
 export interface Progress {
   stage: string;
   message: string;
@@ -84,9 +90,9 @@ export const api = {
   parse: (text: string, opts: ParseOptions) => invoke<Track[]>("parse_tracklist", { text, opts }),
   getThumbnail: (url: string, videoId: string) =>
     invoke<string>("get_thumbnail", { url, videoId }),
-  preparePreview: (url: string, videoId: string) =>
-    invoke<string>("prepare_preview", { url, videoId }),
-  cachedPreview: (videoId: string) => invoke<string | null>("cached_preview", { videoId }),
+  preparePreview: (url: string, videoId: string, forceEncode: boolean) =>
+    invoke<PreviewInfo>("prepare_preview", { url, videoId, forceEncode }),
+  cachedPreview: (videoId: string) => invoke<PreviewInfo | null>("cached_preview", { videoId }),
   defaultOutputDir: (album: string) => invoke<string>("default_output_dir", { album }),
   ytdlpVersion: () => invoke<string>("ytdlp_version"),
   clearCache: () => invoke<number>("clear_cache"),
