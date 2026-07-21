@@ -22,7 +22,7 @@ html, body {
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-#app { max-width: 1100px; margin: 0 auto; padding: 0 20px 60px; }
+#app { max-width: 1240px; margin: 0 auto; padding: 0 20px 60px; }
 
 .topbar {
   position: sticky; top: 0; z-index: 5;
@@ -106,8 +106,17 @@ button.ghost { background: transparent; font-size: 13px; }
 .chk input, .rad input { accent-color: var(--accent); }
 .regex { font-family: ui-monospace, monospace; font-size: 12px; margin-top: 8px; }
 
-/* video preview + chapters */
-.preview-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; margin-bottom: 16px; align-items: start; }
+/* player + chapters, both full width */
+.preview-grid { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 14px; }
+
+/* raw tracklist text, tucked behind a disclosure — rarely needed */
+details.raw { border: 1px solid var(--line); border-radius: 8px; background: var(--card2); }
+details.raw > summary {
+  cursor: pointer; padding: 10px 12px; font-size: 13px; user-select: none; border-radius: 8px;
+}
+details.raw > summary:hover { color: var(--accent); }
+details.raw[open] > summary { border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; }
+details.raw .tl-editor { padding: 12px; }
 /* local audio preview */
 .preview-video { background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
 .preview-idle { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
@@ -150,14 +159,51 @@ button.ghost { background: transparent; font-size: 13px; }
   background: #fff; box-shadow: 0 0 6px rgba(255,255,255,0.8); pointer-events: none;
 }
 .preview li.active { background: rgba(87,199,163,0.16); }
+/* seek-mode toggle switch */
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; margin-left: 10px; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.sw-track {
+  width: 34px; height: 19px; border-radius: 999px; background: var(--line);
+  position: relative; transition: background 0.15s ease; flex: 0 0 34px;
+}
+.sw-knob {
+  position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%;
+  background: #cfcfdb; transition: transform 0.15s ease, background 0.15s ease;
+}
+.switch input:checked + .sw-track { background: var(--accent); }
+.switch input:checked + .sw-track .sw-knob { transform: translateX(15px); background: #fff; }
+.switch input:focus-visible + .sw-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sw-label { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.switch input:checked ~ .sw-label { color: var(--text); }
+.tlhint { margin: 0; font-size: 11.5px; }
+.tlhint b { color: var(--text); font-weight: 600; }
+.tltip {
+  position: fixed; z-index: 50; pointer-events: none;
+  background: #0d0d13; border: 1px solid var(--accent); border-radius: 7px;
+  padding: 6px 10px; font-size: 12px; color: var(--text);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.45); max-width: 340px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tltip .tt { color: var(--accent2); margin-left: 8px; font-variant-numeric: tabular-nums; }
+
 .previewnote {
   margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--muted);
   background: rgba(224,179,84,0.09); border-left: 2px solid var(--warn);
   padding: 7px 10px; border-radius: 0 6px 6px 0;
 }
 
-.preview { list-style: none; margin: 0; padding: 6px; background: var(--card2); border: 1px solid var(--line); border-radius: 8px; max-height: 300px; overflow: auto; font-size: 12.5px; }
-.preview li { padding: 4px 6px; border-radius: 6px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; gap: 8px; cursor: pointer; }
+/* chapters fill the full width — two columns when there's room */
+/* one track per row — full width, easier to scan than columns */
+.preview {
+  list-style: none; margin: 0; padding: 6px; background: var(--card2);
+  border: 1px solid var(--line); border-radius: 8px; max-height: 340px; overflow: auto;
+  font-size: 12.5px;
+}
+.preview li { padding: 5px 8px; border-radius: 6px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; align-items: baseline; gap: 10px; cursor: pointer; }
+.preview .pnum {
+  color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11.5px;
+  min-width: 20px; text-align: right; opacity: 0.75;
+}
 .preview li:last-child { border: 0; }
 .preview li:hover { background: rgba(124,108,255,0.14); }
 .preview .pt { color: var(--accent2); font-variant-numeric: tabular-nums; min-width: 62px; }

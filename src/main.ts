@@ -62,8 +62,14 @@ app.innerHTML = /* html */ `
                 <button id="btnPlay" class="playbtn" title="Play / pause">▶</button>
                 <span class="time"><span id="curTime">0:00</span> <span class="muted">/</span> <span id="durTime">0:00</span></span>
                 <span id="nowPlaying" class="nowplaying muted">—</span>
+                <label class="switch" title="Off: clicking picks a track. On: clicking scrubs to that exact point.">
+                  <input type="checkbox" id="seekMode" />
+                  <span class="sw-track"><span class="sw-knob"></span></span>
+                  <span class="sw-label">Seek mode</span>
+                </label>
               </div>
-              <div id="timeline" class="timeline" title="Click to scrub"></div>
+              <div id="timeline" class="timeline"></div>
+              <p class="hint tlhint" id="tlHint"></p>
               <p id="previewNote" class="previewnote hidden">
                 ℹ︎ This preview had to be re-encoded to a reduced-quality mono copy so it
                 plays here. Your split tracks are cut from the full-quality source and
@@ -72,22 +78,24 @@ app.innerHTML = /* html */ `
             </div>
           </div>
           <div class="tl-right">
-            <label class="lbl">Chapters — <span id="trackCount">0</span> tracks <span class="muted">(click a row to jump)</span></label>
+            <label class="lbl">Chapters — <span id="trackCount">0</span> tracks <span class="muted">(click a row to jump to its start)</span></label>
             <ol id="preview" class="preview"></ol>
           </div>
         </div>
-        <div class="tl-editor">
-          <div class="tl-left">
-            <label class="lbl">Tracklist text <span class="muted">(edit freely — parses live)</span></label>
-            <textarea id="tlText" spellcheck="false" placeholder="mm:ss Title - Artist"></textarea>
-            <div class="row wrap opts">
-              <label class="chk"><input type="checkbox" id="artistFirst" /> Artist appears before title</label>
-              <label class="chk adv"><input type="checkbox" id="useRegex" /> Custom regex</label>
-              <input id="regex" class="regex hidden" type="text" spellcheck="false"
-                placeholder="(?P&lt;ts&gt;[\\d:]+)\\s+(?P&lt;artist&gt;.+?)\\s+-\\s+(?P&lt;title&gt;.+)" />
+        <details id="rawDetails" class="raw">
+          <summary>Raw tracklist text <span class="muted">— only needed if the detected list is wrong</span></summary>
+          <div class="tl-editor">
+            <div class="tl-left">
+              <textarea id="tlText" spellcheck="false" placeholder="mm:ss Title - Artist"></textarea>
+              <div class="row wrap opts">
+                <label class="chk"><input type="checkbox" id="artistFirst" /> Artist appears before title</label>
+                <label class="chk adv"><input type="checkbox" id="useRegex" /> Custom regex</label>
+                <input id="regex" class="regex hidden" type="text" spellcheck="false"
+                  placeholder="(?P&lt;ts&gt;[\\d:]+)\\s+(?P&lt;artist&gt;.+?)\\s+-\\s+(?P&lt;title&gt;.+)" />
+              </div>
             </div>
           </div>
-        </div>
+        </details>
       </section>
 
       <section class="card">
@@ -401,9 +409,11 @@ async function detect() {
       "No tracklist detected in the description or top comments. Paste one below — it parses as you type.";
     tlText.value = "";
     logLine("No tracklist detected — paste one manually.");
+    ($("#rawDetails") as HTMLDetailsElement).open = true; // they'll need the editor now
     await reparse();
     return;
   }
+  ($("#rawDetails") as HTMLDetailsElement).open = false;
   tlFeedback.className = "feedback ok";
   tlFeedback.textContent =
     cands.length === 1
@@ -465,14 +475,15 @@ async function reparse() {
     return;
   }
   trackCount.textContent = String(tracks.length);
+  const pad = String(tracks.length).length;
   previewEl.innerHTML = tracks
     .map(
-      (t) =>
-        `<li data-start="${t.start}" title="Jump to ${hms(t.start)}"><span class="pt">▸ ${hms(
-          t.start
-        )}</span> <span class="ptitle">${escapeHtml(t.title || "(untitled)")}</span>${
-          t.artist ? ` <span class="partist">— ${escapeHtml(t.artist)}</span>` : ""
-        }</li>`
+      (t, i) =>
+        `<li data-start="${t.start}" title="Jump to ${hms(t.start)}"><span class="pnum">${String(
+          i + 1
+        ).padStart(pad, "0")}</span><span class="pt">${hms(t.start)}</span> <span class="ptitle">${escapeHtml(
+          t.title || "(untitled)"
+        )}</span>${t.artist ? ` <span class="partist">— ${escapeHtml(t.artist)}</span>` : ""}</li>`
     )
     .join("");
   renderTimeline();
@@ -563,13 +574,66 @@ audio.addEventListener("error", () => {
 });
 audio.addEventListener("timeupdate", updatePlayhead);
 
-// Click anywhere on the timeline to scrub.
+// Clicking picks a track by default; "Seek mode" switches to free scrubbing. Alt/Shift
+// inverts whichever is active, for one-offs. (Alt is Option on macOS; we also accept
+// Shift because some Linux window managers swallow Alt+click.)
+const isMac = navigator.userAgent.includes("Mac");
+const ALT = isMac ? "⌥" : "Alt";
+const SEEK_MODE = "timelineSeekMode";
+const seekModeEl = $<HTMLInputElement>("#seekMode");
+seekModeEl.checked = localStorage.getItem(SEEK_MODE) === "1";
+function renderHint() {
+  $("#tlHint").innerHTML = seekModeEl.checked
+    ? `Click the timeline to scrub to that exact point · <b>${ALT}/Shift-click</b> to jump to a track's start instead · the chapter list always jumps.`
+    : `Click a block to jump to that track · <b>${ALT}/Shift-click</b> to scrub to an exact point · or turn on <b>Seek mode</b>.`;
+}
+renderHint();
+seekModeEl.addEventListener("change", () => {
+  localStorage.setItem(SEEK_MODE, seekModeEl.checked ? "1" : "0");
+  renderHint();
+});
+
+/** Index of the track playing at `time`, or -1. */
+function trackAt(time: number): number {
+  let idx = -1;
+  for (let i = 0; i < tracks.length; i++) if (time >= tracks[i].start) idx = i;
+  return idx;
+}
+
+const timeAtEvent = (e: MouseEvent, dur: number) => {
+  const r = timelineEl.getBoundingClientRect();
+  return Math.min(dur, Math.max(0, ((e.clientX - r.left) / r.width) * dur));
+};
+
 timelineEl.addEventListener("click", (e) => {
   const dur = previewDuration();
   if (!dur) return;
-  const r = timelineEl.getBoundingClientRect();
-  seekTo(((e.clientX - r.left) / r.width) * dur);
+  const t = timeAtEvent(e, dur);
+  const inverted = e.altKey || e.shiftKey;
+  const wantTrackStart = seekModeEl.checked ? inverted : !inverted;
+  const idx = trackAt(t);
+  seekTo(wantTrackStart && idx >= 0 ? tracks[idx].start : t);
 });
+
+// Hover tooltip: which track you're over, and the time under the cursor.
+const tip = document.createElement("div");
+tip.className = "tltip hidden";
+document.body.appendChild(tip);
+timelineEl.addEventListener("mousemove", (e) => {
+  const dur = previewDuration();
+  if (!dur) return;
+  const t = timeAtEvent(e, dur);
+  const idx = trackAt(t);
+  const trk = idx >= 0 ? tracks[idx] : null;
+  tip.innerHTML = trk
+    ? `<b>${escapeHtml(trk.title || "(untitled)")}</b>${trk.artist ? ` — ${escapeHtml(trk.artist)}` : ""}<span class="tt">${hms(t)}</span>`
+    : `<span class="tt">${hms(t)}</span>`;
+  tip.classList.remove("hidden");
+  const r = timelineEl.getBoundingClientRect();
+  tip.style.left = `${Math.min(window.innerWidth - tip.offsetWidth - 8, Math.max(8, e.clientX - tip.offsetWidth / 2))}px`;
+  tip.style.top = `${r.top - tip.offsetHeight - 8}px`;
+});
+timelineEl.addEventListener("mouseleave", () => tip.classList.add("hidden"));
 
 function previewDuration(): number {
   return Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : info?.duration ?? 0;
@@ -587,8 +651,7 @@ function renderTimeline() {
       const end = i + 1 < tracks.length ? tracks[i + 1].start : dur;
       const left = (t.start / dur) * 100;
       const width = Math.max(0.2, ((end - t.start) / dur) * 100);
-      const label = `${hms(t.start)} — ${t.title || "(untitled)"}${t.artist ? ` · ${t.artist}` : ""}`;
-      return `<div class="seg${i % 2 ? " alt" : ""}" data-i="${i}" style="left:${left}%;width:${width}%" title="${escapeHtml(label)}"></div>`;
+      return `<div class="seg${i % 2 ? " alt" : ""}" data-i="${i}" style="left:${left}%;width:${width}%"></div>`;
     })
     .join("");
   timelineEl.innerHTML = `${segs}<div id="tlFill" class="tl-fill"></div><div id="tlHead" class="tl-head"></div>`;
@@ -605,8 +668,7 @@ function updatePlayhead() {
   head.style.left = `${pct}%`;
   curTimeEl.textContent = hms(audio.currentTime);
 
-  let idx = -1;
-  for (let i = 0; i < tracks.length; i++) if (audio.currentTime >= tracks[i].start) idx = i;
+  const idx = trackAt(audio.currentTime);
   timelineEl.querySelectorAll(".seg.active").forEach((s) => s.classList.remove("active"));
   previewEl.querySelectorAll("li.active").forEach((li) => li.classList.remove("active"));
   if (idx >= 0) {
