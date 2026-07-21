@@ -25,11 +25,19 @@ pub struct VideoInfo {
     pub native_abr: f64,
 }
 
+fn yes() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Track {
     pub start: f64,
     pub title: String,
     pub artist: String,
+    /// Whether to actually extract this track. Deselected tracks are skipped entirely
+    /// (no ffmpeg run), but still contribute their timestamp as the previous track's end.
+    #[serde(default = "yes")]
+    pub selected: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

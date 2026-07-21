@@ -90,7 +90,7 @@ pub fn parse_heuristic(text: &str, artist_first: bool) -> Vec<Track> {
         rest.push_str(&line[prev..]);
         let cleaned = clean_text(&rest);
         let (title, artist) = split_title_artist(&cleaned, artist_first);
-        out.push(Track { start, title, artist });
+        out.push(Track { start, title, artist, selected: true });
     }
     out
 }
@@ -111,6 +111,7 @@ fn parse_regex(text: &str, pattern: &str) -> Result<Vec<Track>, String> {
             start,
             title: caps.name("title").map(|m| m.as_str().trim().to_string()).unwrap_or_default(),
             artist: caps.name("artist").map(|m| m.as_str().trim().to_string()).unwrap_or_default(),
+            selected: true,
         });
     }
     Ok(out)

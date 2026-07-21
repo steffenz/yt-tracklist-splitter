@@ -82,7 +82,14 @@ app.innerHTML = /* html */ `
             </div>
           </div>
           <div class="tl-right">
-            <label class="lbl">Chapters — <span id="trackCount">0</span> tracks <span class="muted">(click a row to jump to its start)</span></label>
+            <div class="chapters-head">
+              <label class="lbl nomargin">Chapters — <span id="selCount">0</span> of <span id="trackCount">0</span> selected
+                <span class="muted">(click a row to jump · tick to choose what gets extracted)</span></label>
+              <span class="selbtns">
+                <button id="btnSelAll" class="ghost tiny">All</button>
+                <button id="btnSelNone" class="ghost tiny">None</button>
+              </span>
+            </div>
             <ol id="preview" class="preview"></ol>
           </div>
         </div>
@@ -478,11 +485,46 @@ const scheduleReparse = () => {
   clearTimeout(reparseTimer);
   reparseTimer = window.setTimeout(reparse, 180);
 };
-// Click a parsed chapter to seek the video preview.
+// Click a chapter row to seek; the checkbox chooses whether it gets extracted.
 previewEl.addEventListener("click", (e) => {
-  const li = (e.target as HTMLElement).closest("li[data-start]") as HTMLElement | null;
+  const target = e.target as HTMLElement;
+  if (target.classList.contains("pick")) return; // let the checkbox do its thing
+  const li = target.closest("li[data-start]") as HTMLElement | null;
   if (li) seekTo(parseFloat(li.dataset.start!));
 });
+previewEl.addEventListener("change", (e) => {
+  const cb = e.target as HTMLInputElement;
+  if (!cb.classList.contains("pick")) return;
+  tracks[Number(cb.dataset.i)].selected = cb.checked;
+  cb.closest("li")?.classList.toggle("off", !cb.checked);
+  updateSelection();
+});
+
+$("#btnSelAll").addEventListener("click", () => setAllSelected(true));
+$("#btnSelNone").addEventListener("click", () => setAllSelected(false));
+
+function setAllSelected(v: boolean) {
+  tracks.forEach((t) => (t.selected = v));
+  previewEl.querySelectorAll<HTMLInputElement>(".pick").forEach((cb) => (cb.checked = v));
+  previewEl.querySelectorAll("li").forEach((li) => li.classList.toggle("off", !v));
+  updateSelection();
+}
+
+/** Reflect the current selection in the count, the timeline, and the Run button. */
+function updateSelection() {
+  const n = tracks.filter((t) => t.selected).length;
+  $("#selCount").textContent = String(n);
+  tracks.forEach((t, i) =>
+    timelineEl.querySelector(`.seg[data-i="${i}"]`)?.classList.toggle("off", !t.selected)
+  );
+  btnRun.textContent =
+    n === 0
+      ? "Select at least one track"
+      : n === tracks.length
+        ? `Split all ${n} tracks`
+        : `Split ${n} of ${tracks.length} tracks`;
+  btnRun.disabled = n === 0;
+}
 tlText.addEventListener("input", scheduleReparse);
 artistFirst.addEventListener("change", reparse);
 regexEl.addEventListener("input", scheduleReparse);
@@ -506,14 +548,15 @@ async function reparse() {
   previewEl.innerHTML = tracks
     .map(
       (t, i) =>
-        `<li data-start="${t.start}" title="Jump to ${hms(t.start)}"><span class="pnum">${String(
-          i + 1
-        ).padStart(pad, "0")}</span><span class="pt">${hms(t.start)}</span> <span class="ptitle">${escapeHtml(
-          t.title || "(untitled)"
-        )}</span>${t.artist ? ` <span class="partist">— ${escapeHtml(t.artist)}</span>` : ""}</li>`
+        `<li data-i="${i}" data-start="${t.start}" class="${t.selected ? "" : "off"}" title="Jump to ${hms(t.start)}">` +
+        `<input type="checkbox" class="pick" data-i="${i}"${t.selected ? " checked" : ""} title="Include this track" />` +
+        `<span class="pnum">${String(i + 1).padStart(pad, "0")}</span>` +
+        `<span class="pt">${hms(t.start)}</span> <span class="ptitle">${escapeHtml(t.title || "(untitled)")}</span>` +
+        `${t.artist ? ` <span class="partist">— ${escapeHtml(t.artist)}</span>` : ""}</li>`
     )
     .join("");
   updateEditedState();
+  updateSelection();
   renderTimeline();
 }
 
@@ -680,7 +723,7 @@ function renderTimeline() {
       const end = i + 1 < tracks.length ? tracks[i + 1].start : dur;
       const left = (t.start / dur) * 100;
       const width = Math.max(0.2, ((end - t.start) / dur) * 100);
-      return `<div class="seg${i % 2 ? " alt" : ""}" data-i="${i}" style="left:${left}%;width:${width}%"></div>`;
+      return `<div class="seg${i % 2 ? " alt" : ""}${t.selected ? "" : " off"}" data-i="${i}" style="left:${left}%;width:${width}%"></div>`;
     })
     .join("");
   timelineEl.innerHTML = `${segs}<div id="tlFill" class="tl-fill"></div><div id="tlHead" class="tl-head"></div>`;
@@ -796,6 +839,10 @@ async function runJob() {
     setStatus("Nothing to split — the tracklist is empty.", "err");
     return;
   }
+  if (!tracks.some((t) => t.selected)) {
+    setStatus("No tracks selected — tick at least one.", "err");
+    return;
+  }
   if (!outdirEl.value) {
     setStatus("Pick an output folder first.", "err");
     return;
@@ -826,7 +873,7 @@ async function runJob() {
     bar.style.width = "100%";
     progressMsg.textContent = "Done ✓";
     btnReveal.classList.remove("hidden");
-    setStatus(`Done — ${tracks.length} tracks written.`, "ok");
+    setStatus(`Done — ${cfg.tracks.filter((t) => t.selected).length} tracks written.`, "ok");
     await refreshCacheSize();
   } catch (e) {
     const msg = String(e);
@@ -847,6 +894,7 @@ async function runJob() {
 
 function setRunning(on: boolean) {
   btnRun.disabled = on;
+  if (!on) updateSelection(); // restores the label + disabled state for the selection
   btnCancel.classList.toggle("hidden", !on);
   // Always stop the sliding animation when a run ends (success, error, or cancel).
   bar.classList.remove("indeterminate");

@@ -244,15 +244,29 @@ pub async fn run_job(
     let outdir = PathBuf::from(&cfg.outdir);
     fs::create_dir_all(&outdir).map_err(|e| format!("cannot create output folder: {e}"))?;
     let total = cfg.tracks.len();
+    let wanted = cfg.tracks.iter().filter(|t| t.selected).count();
+    if wanted == 0 {
+        return Err("No tracks selected.".into());
+    }
     let pad = total.to_string().len();
-    log(&app, format!(">> splitting {total} tracks into {}", outdir.display()));
+    if wanted == total {
+        log(&app, format!(">> splitting {total} tracks into {}", outdir.display()));
+    } else {
+        log(&app, format!(">> splitting {wanted} of {total} tracks into {}", outdir.display()));
+    }
+    let mut done = 0usize;
 
     for (i, t) in cfg.tracks.iter().enumerate() {
         if cancelled() {
             return Err("Cancelled.".into());
         }
         let start = t.start;
+        // Boundaries always come from the FULL list, so skipping a track never stretches
+        // the previous one past where it actually ends.
         let end = if i + 1 < total { cfg.tracks[i + 1].start } else { duration };
+        if !t.selected {
+            continue; // never invoked -> no ffmpeg work at all
+        }
         if end <= start {
             log(&app, format!("!! skipping '{}' (non-positive length)", t.title));
             continue;
@@ -264,14 +278,9 @@ pub async fn run_job(
             base.push_str(&format!(" - {}", sanitize(&t.artist)));
         }
         let out = outdir.join(format!("{base}.{fmt}"));
-        emit_progress(
-            &app,
-            "split",
-            &title,
-            (i + 1) as u32,
-            total as u32,
-            ((i + 1) as f64 / total as f64) * 100.0,
-        );
+        done += 1;
+        // Progress counts only the tracks we're actually writing.
+        emit_progress(&app, "split", &title, done as u32, wanted as u32, (done as f64 / wanted as f64) * 100.0);
         media::split_track(
             &app,
             &source,
@@ -289,7 +298,7 @@ pub async fn run_job(
             cover.as_deref(),
         )
         .await?;
-        log(&app, format!("   [{}/{}] {title}", i + 1, total));
+        log(&app, format!("   [{done}/{wanted}] {num} {title}"));
     }
 
     // 4. Finish: folder cover, optional full set, cleanup.

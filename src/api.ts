@@ -26,6 +26,8 @@ export interface Track {
   start: number;
   title: string;
   artist: string;
+  /** Deselected tracks are skipped entirely (no ffmpeg run for them). */
+  selected: boolean;
 }
 
 export interface TracklistCandidate {

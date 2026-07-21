@@ -209,6 +209,15 @@ details.raw .tl-editor { padding: 12px; }
   font-size: 13px;
 }
 .preview li { padding: 5px 8px; border-radius: 6px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; align-items: baseline; gap: 10px; cursor: pointer; }
+.chapters-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.selbtns { display: flex; gap: 6px; }
+button.tiny { padding: 3px 10px; font-size: 12px; }
+.preview .pick { accent-color: var(--accent); cursor: pointer; margin: 0; flex: 0 0 auto; align-self: center; }
+/* deselected tracks stay visible (you still need their timestamp) but read as inactive */
+.preview li.off { opacity: 0.42; }
+.preview li.off .ptitle { text-decoration: line-through; }
+.timeline .seg.off { background: rgba(255,255,255,0.05); border-right-color: rgba(255,255,255,0.08); }
+.timeline .seg.off:hover { background: rgba(255,255,255,0.12); }
 .preview .pnum {
   color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px;
   min-width: 20px; text-align: right; opacity: 0.75;
