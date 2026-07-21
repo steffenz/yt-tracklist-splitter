@@ -28,7 +28,7 @@ pub fn run() {
             commands::fetch_info,
             commands::detect_tracklists,
             commands::parse_tracklist,
-            commands::set_track_time,
+            commands::set_track_fields,
             commands::single_track_fallback,
             commands::get_thumbnail,
             commands::prepare_preview,

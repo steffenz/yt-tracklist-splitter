@@ -239,7 +239,14 @@ dialog.tune {
   color: var(--text); padding: 22px; width: min(560px, 92vw); font: inherit;
 }
 dialog.tune::backdrop { background: rgba(0,0,0,0.55); }
-dialog.tune h3 { margin: 0 0 16px; font-size: 15px; font-weight: 600; }
+dialog.tune h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.tunehead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.tunenav { display: inline-flex; align-items: center; gap: 6px; }
+.tunenav button { padding: 2px 10px; font-size: 14px; line-height: 1.4; }
+.tunenav #tunePos { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 46px; text-align: center; }
+.tunefields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.tunefields input { font-size: 13px; }
+.chk.follow { margin-left: auto; font-size: 12.5px; }
 .tunerow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .tunerow input {
   width: 160px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

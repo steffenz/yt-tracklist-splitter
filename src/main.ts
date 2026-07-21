@@ -176,7 +176,18 @@ app.innerHTML = /* html */ `
     </section>
 
     <dialog id="tuneDlg" class="tune">
-      <h3 id="tuneTitle">Fine-tune start</h3>
+      <div class="tunehead">
+        <h3 id="tuneTitle">Fine-tune start</h3>
+        <span class="tunenav">
+          <button id="tunePrev" class="ghost tiny" title="Previous track (applies your changes)">‹</button>
+          <span id="tunePos" class="muted">–</span>
+          <button id="tuneNext" class="ghost tiny" title="Next track (applies your changes)">›</button>
+        </span>
+      </div>
+      <div class="tunefields">
+        <label class="field">Title <input id="tuneTitleIn" type="text" spellcheck="false" /></label>
+        <label class="field">Artist <input id="tuneArtistIn" type="text" spellcheck="false" /></label>
+      </div>
       <div class="tunerow">
         <input id="tuneInput" type="text" spellcheck="false" />
         <span id="tuneDelta" class="muted"></span>
@@ -185,6 +196,7 @@ app.innerHTML = /* html */ `
         <button data-d="-1">−1s</button><button data-d="-0.1">−100</button><button data-d="-0.01">−10</button>
         <span class="nudge-unit muted">ms</span>
         <button data-d="0.01">+10</button><button data-d="0.1">+100</button><button data-d="1">+1s</button>
+        <label class="chk follow"><input type="checkbox" id="tuneFollow" /> Follow playback</label>
       </div>
       <div id="tuneZoom" class="tunezoom" title="Click to set the start time"></div>
       <div class="zoomscale muted">
@@ -389,6 +401,7 @@ function resetUI() {
   timelineEl.style.backgroundImage = "none";
   minimapEl.style.backgroundImage = "none";
   fullWaveUrl = null;
+  fullWavePromise = null;
   viewStart = 0;
   viewEnd = 0;
   curTimeEl.textContent = "0:00";
@@ -694,6 +707,7 @@ function loadPreview(p: PreviewInfo) {
   viewStart = 0;
   viewEnd = 0;
   fullWaveUrl = null;
+  fullWavePromise = null;
   loadFullWaveform();
   if (p.path.endsWith(".caf")) {
     // If metadata never arrives, the format isn't playable here — fall back.
@@ -739,6 +753,10 @@ audio.addEventListener("loadedmetadata", () => {
   viewStart = 0; // new audio -> back to the full view
   viewEnd = audio.duration;
   renderTimeline();
+  // Now that the duration is known, make sure the waveform is actually on screen — it
+  // may have resolved while the view was still uninitialised.
+  if (fullWaveUrl) timelineEl.style.backgroundImage = `url("${fullWaveUrl}")`;
+  else loadFullWaveform();
 });
 audio.addEventListener("error", () => {
   if ((audio.getAttribute("src") || "").includes(".caf")) fallbackToEncoded("unsupported format");
@@ -758,7 +776,18 @@ audio.addEventListener("timeupdate", () => {
     }
   }
   updatePlayhead();
-  if (tuneDlg.open) renderTune(); // keep the zoom strip's playhead live
+  if (tuneDlg.open) {
+    // Optionally scroll the fine-tune window along with playback.
+    if (
+      ($("#tuneFollow") as HTMLInputElement).checked &&
+      !audio.paused &&
+      (audio.currentTime < tuneWinStart || audio.currentTime > tuneWinEnd)
+    ) {
+      tuneCentre = audio.currentTime;
+      scheduleTuneWave();
+    }
+    renderTune(); // keep the zoom strip's playhead live
+  }
 });
 
 // Clicking picks a track by default; "Seek mode" switches to free scrubbing. Alt/Shift
@@ -893,17 +922,29 @@ function scheduleWaveform() {
 }
 
 /** The whole-set waveform, reused as the minimap background (and at full zoom). */
-async function loadFullWaveform() {
+let fullWavePromise: Promise<void> | null = null;
+
+/** True while the timeline is showing the whole file — including before metadata has
+ *  arrived, when the view is still uninitialised (0..0). */
+function viewIsFull(): boolean {
+  return viewEnd <= viewStart || viewSpan() >= previewDuration() - 0.01;
+}
+
+async function loadFullWaveform(): Promise<void> {
   if (!info) return;
-  try {
-    fullWaveUrl = convertFileSrc(await api.waveform(info.id, 2000));
-    minimapEl.style.backgroundImage = `url("${fullWaveUrl}")`;
-    if (viewSpan() >= previewDuration() - 0.01) {
-      timelineEl.style.backgroundImage = `url("${fullWaveUrl}")`;
+  // Memoised: metadata and the preview both want this, and two concurrent ffmpeg runs
+  // would be writing the same PNG.
+  if (fullWavePromise) return fullWavePromise;
+  fullWavePromise = (async () => {
+    try {
+      fullWaveUrl = convertFileSrc(await api.waveform(info!.id, 2000));
+      minimapEl.style.backgroundImage = `url("${fullWaveUrl}")`;
+      if (viewIsFull()) timelineEl.style.backgroundImage = `url("${fullWaveUrl}")`;
+    } catch {
+      /* waveform is a nicety — never block the timeline on it */
     }
-  } catch {
-    /* waveform is a nicety — never block the timeline on it */
-  }
+  })();
+  return fullWavePromise;
 }
 
 async function loadWaveform() {
@@ -911,7 +952,7 @@ async function loadWaveform() {
   const dur = previewDuration();
   if (!dur) return;
   ensureView();
-  if (viewSpan() >= dur - 0.01) {
+  if (viewIsFull()) {
     if (fullWaveUrl) timelineEl.style.backgroundImage = `url("${fullWaveUrl}")`;
     else await loadFullWaveform();
     return;
@@ -1104,10 +1145,15 @@ function openTune(i: number) {
   tuneVal = t.start;
   tuneHalf = 5;
   tuneCentre = t.start;
-  $("#tuneTitle").textContent = `Fine-tune “${t.title || "(untitled)"}”`;
+  $("#tuneTitle").textContent = `Fine-tune track ${i + 1}`;
+  tuneTitleIn.value = t.title;
+  tuneArtistIn.value = t.artist;
+  $("#tunePos").textContent = `${i + 1} / ${tracks.length}`;
+  ($("#tunePrev") as HTMLButtonElement).disabled = i === 0;
+  ($("#tuneNext") as HTMLButtonElement).disabled = i >= tracks.length - 1;
   tuneZoom.style.backgroundImage = "none";
   renderTune();
-  tuneDlg.showModal();
+  if (!tuneDlg.open) tuneDlg.showModal(); // may already be open when stepping tracks
   loadTuneWave();
 }
 
@@ -1200,22 +1246,60 @@ $("#tuneCancel").addEventListener("click", () => {
   tuneDlg.close();
 });
 
-$("#tuneApply").addEventListener("click", async () => {
+const tuneTitleIn = $<HTMLInputElement>("#tuneTitleIn");
+const tuneArtistIn = $<HTMLInputElement>("#tuneArtistIn");
+
+/** Has anything actually changed relative to the parsed track? */
+function tuneDirty(): boolean {
   const t = tracks[tuneIdx];
-  if (!t) return tuneDlg.close();
-  audio.pause();
+  if (!t) return false;
+  return (
+    tuneVal !== t.start ||
+    tuneTitleIn.value.trim() !== t.title ||
+    tuneArtistIn.value.trim() !== t.artist
+  );
+}
+
+/** Write the edits back into the raw tracklist text and re-parse. */
+async function applyTune(): Promise<boolean> {
+  const t = tracks[tuneIdx];
+  if (!t) return false;
+  if (!tuneDirty()) return true;
   try {
-    // Rewrite the raw text so it stays the single source of truth, then re-parse.
     preserveSel = new Map(tracks.map((x) => [x.line, x.selected]));
-    tlText.value = await api.setTrackTime(tlText.value, t.line, tuneVal);
+    tlText.value = await api.setTrackFields(
+      tlText.value,
+      t.line,
+      tuneVal,
+      tuneTitleIn.value,
+      tuneArtistIn.value
+    );
     await reparse();
-    logLine(`Adjusted “${t.title || "(untitled)"}” to ${hms(tuneVal)}`);
+    logLine(`Updated track ${tuneIdx + 1}: “${tuneTitleIn.value.trim() || "(untitled)"}” @ ${hms(tuneVal)}`);
+    return true;
   } catch (e) {
     setStatus(String(e), "err");
     logLine(`ERROR: ${e}`);
+    return false;
   }
+}
+
+$("#tuneApply").addEventListener("click", async () => {
+  audio.pause();
+  await applyTune();
   tuneDlg.close();
 });
+
+// Step between tracks without leaving the dialog; pending edits are applied first.
+$("#tunePrev").addEventListener("click", () => stepTune(-1));
+$("#tuneNext").addEventListener("click", () => stepTune(1));
+async function stepTune(d: number) {
+  const next = tuneIdx + d;
+  if (next < 0 || next >= tracks.length) return;
+  audio.pause();
+  if (!(await applyTune())) return;
+  openTune(next);
+}
 
 // ---- step 3: cover -----------------------------------------------------------
 document.querySelectorAll<HTMLInputElement>("input[name=coverMode]").forEach((r) =>

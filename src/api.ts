@@ -94,8 +94,8 @@ export const api = {
   fetchInfo: (url: string) => invoke<VideoInfo>("fetch_info", { url }),
   detect: (info: VideoInfo) => invoke<TracklistCandidate[]>("detect_tracklists", { info }),
   parse: (text: string, opts: ParseOptions) => invoke<Track[]>("parse_tracklist", { text, opts }),
-  setTrackTime: (text: string, line: number, seconds: number) =>
-    invoke<string>("set_track_time", { text, line, seconds }),
+  setTrackFields: (text: string, line: number, seconds: number, title: string, artist: string) =>
+    invoke<string>("set_track_fields", { text, line, seconds, title, artist }),
   singleTrackFallback: (title: string, uploader: string) =>
     invoke<string>("single_track_fallback", { title, uploader }),
   getThumbnail: (url: string, videoId: string) =>

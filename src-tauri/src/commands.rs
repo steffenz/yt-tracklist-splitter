@@ -60,11 +60,17 @@ pub fn single_track_fallback(title: String, uploader: String) -> String {
     tracklist::single_track_line(&title, &uploader)
 }
 
-/// Rewrite one line's timestamp (used by the fine-tune editor) and hand back the new
-/// tracklist text, so the raw text remains the single source of truth.
+/// Rewrite one line from the fine-tune editor (time + title + artist) and hand back the
+/// new tracklist text, so the raw text remains the single source of truth.
 #[tauri::command]
-pub fn set_track_time(text: String, line: usize, seconds: f64) -> Result<String, String> {
-    tracklist::set_line_timestamp(&text, line, seconds)
+pub fn set_track_fields(
+    text: String,
+    line: usize,
+    seconds: f64,
+    title: String,
+    artist: String,
+) -> Result<String, String> {
+    tracklist::set_line_fields(&text, line, seconds, &title, &artist)
 }
 
 /// Fetch the thumbnail and return a filesystem path (frontend converts to an asset URL).

@@ -53,13 +53,22 @@ pub fn seconds_to_hms(total: f64) -> String {
     }
 }
 
-/// Replace the first timestamp on `line_no` of `text` with `seconds`, leaving the rest of
-/// the line untouched. Used by the fine-tune editor so the raw text stays authoritative.
-pub fn set_line_timestamp(text: &str, line_no: usize, seconds: f64) -> Result<String, String> {
+/// Rewrite one tracklist line from the fine-tune editor's fields, in canonical form
+/// (`mm:ss.mmm - Title - Artist`). The raw text stays the single source of truth.
+pub fn set_line_fields(
+    text: &str,
+    line_no: usize,
+    seconds: f64,
+    title: &str,
+    artist: &str,
+) -> Result<String, String> {
     let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
-    let line = lines.get(line_no).ok_or("line out of range")?.clone();
-    let (s, e, _) = *all_timestamps(&line).first().ok_or("no timestamp on that line")?;
-    lines[line_no] = format!("{}{}{}", &line[..s], seconds_to_hms(seconds), &line[e..]);
+    if line_no >= lines.len() {
+        return Err("line out of range".into());
+    }
+    let ts = seconds_to_hms(seconds);
+    let (t, a) = (title.trim(), artist.trim());
+    lines[line_no] = if a.is_empty() { format!("{ts} - {t}") } else { format!("{ts} - {t} - {a}") };
     Ok(lines.join("\n"))
 }
 
@@ -361,11 +370,20 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_only_the_target_line_timestamp() {
+    fn rewrites_only_the_target_line() {
         let t = "00:16 - A - X\n3:24 - B - Y\n5:00 - C - Z";
-        let out = set_line_timestamp(t, 1, 204.4).unwrap();
+        let out = set_line_fields(t, 1, 204.4, "B", "Y").unwrap();
         assert_eq!(out, "00:16 - A - X\n03:24.400 - B - Y\n5:00 - C - Z");
         assert_eq!(parse_heuristic(&out, false)[1].start, 204.4);
+
+        // title/artist can be edited from the dialog too, and round-trip cleanly
+        let out = set_line_fields(t, 1, 204.0, "New Title", "New Artist").unwrap();
+        let p = &parse_heuristic(&out, false)[1];
+        assert_eq!((p.title.as_str(), p.artist.as_str()), ("New Title", "New Artist"));
+
+        // dropping the artist leaves a clean two-field line
+        let out = set_line_fields(t, 1, 204.0, "Solo", "").unwrap();
+        assert_eq!(out.lines().nth(1).unwrap(), "03:24 - Solo");
     }
 
     #[test]
