@@ -54,6 +54,12 @@ pub fn parse_tracklist(text: String, opts: ParseOptions) -> Result<Vec<Track>, S
     tracklist::parse(&text, &opts)
 }
 
+/// Guess a one-line tracklist for a video that has no tracklist at all (a single song).
+#[tauri::command]
+pub fn single_track_fallback(title: String, uploader: String) -> String {
+    tracklist::single_track_line(&title, &uploader)
+}
+
 /// Rewrite one line's timestamp (used by the fine-tune editor) and hand back the new
 /// tracklist text, so the raw text remains the single source of truth.
 #[tauri::command]

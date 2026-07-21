@@ -96,6 +96,8 @@ export const api = {
   parse: (text: string, opts: ParseOptions) => invoke<Track[]>("parse_tracklist", { text, opts }),
   setTrackTime: (text: string, line: number, seconds: number) =>
     invoke<string>("set_track_time", { text, line, seconds }),
+  singleTrackFallback: (title: string, uploader: string) =>
+    invoke<string>("single_track_fallback", { title, uploader }),
   getThumbnail: (url: string, videoId: string) =>
     invoke<string>("get_thumbnail", { url, videoId }),
   preparePreview: (url: string, videoId: string, forceEncode: boolean) =>

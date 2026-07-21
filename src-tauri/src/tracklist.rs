@@ -63,6 +63,46 @@ pub fn set_line_timestamp(text: &str, line_no: usize, seconds: f64) -> Result<St
     Ok(lines.join("\n"))
 }
 
+/// Promo noise commonly bracketed onto single-track video titles.
+static NOISE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\s*[\(\[]\s*[^\)\]]*\b(?:official|lyrics?|audio|video|visuali[sz]er|hd|hq|4k|mv)\b[^\)\]]*[\)\]]",
+    )
+    .unwrap()
+});
+
+fn clean_video_title(t: &str) -> String {
+    let t = NOISE_RE.replace_all(t, "");
+    t.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|c: char| c == '-' || c == '\u{2013}' || c == '\u{2014}' || c == '|' || c.is_whitespace())
+        .to_string()
+}
+
+/// YouTube's auto-generated artist channels are named "Artist - Topic".
+fn clean_uploader(u: &str) -> String {
+    u.trim().trim_end_matches("- Topic").trim().to_string()
+}
+
+/// Last-resort tracklist for videos that are just one song: guess title/artist from the
+/// video title, falling back to the uploader as the artist. Emitted as a normal tracklist
+/// line so everything downstream (editing, fine-tuning, splitting) works unchanged.
+pub fn single_track_line(title: &str, uploader: &str) -> String {
+    let clean = clean_video_title(title);
+    let up = clean_uploader(uploader);
+    let parts: Vec<&str> = SEP_RE.split(&clean).map(str::trim).filter(|p| !p.is_empty()).collect();
+    // Single-song videos are conventionally titled "Artist - Title" — the opposite order
+    // to a tracklist line, so swap. Only when it's unambiguous (exactly two fields).
+    if parts.len() == 2 {
+        format!("0:00 - {} - {}", parts[1], parts[0])
+    } else if !up.is_empty() {
+        format!("0:00 - {clean} - {up}")
+    } else {
+        format!("0:00 - {clean}")
+    }
+}
+
 /// All boundary-valid timestamps on a line (not glued to another digit or `:` group),
 /// as `(start_byte, end_byte, seconds)`.
 fn all_timestamps(line: &str) -> Vec<(usize, usize, f64)> {
@@ -278,6 +318,32 @@ mod tests {
         assert_eq!(tracks[0].title, "Intro Track");
         assert_eq!(tracks[1].title, "Nightcall");
         assert_eq!(tracks[1].artist, "Kavinsky");
+    }
+
+    #[test]
+    fn single_track_fallback_handles_common_shapes() {
+        // "Artist - Title (Official Video)" -> swapped into tracklist order, noise stripped
+        let l = single_track_line("Kavinsky - Nightcall (Official Video)", "Record Makers");
+        assert_eq!(l, "0:00 - Nightcall - Kavinsky");
+        let t = &parse_heuristic(&l, false)[0];
+        assert_eq!((t.title.as_str(), t.artist.as_str(), t.start), ("Nightcall", "Kavinsky", 0.0));
+
+        // title is just the song, artist comes from an auto-generated "- Topic" channel
+        let l = single_track_line("Nightcall", "Kavinsky - Topic");
+        assert_eq!(l, "0:00 - Nightcall - Kavinsky");
+
+        // bracketed promo junk in various forms
+        assert_eq!(single_track_line("Some Song [Official Music Video]", "A"), "0:00 - Some Song - A");
+        assert_eq!(single_track_line("Some Song (Lyrics)", "A"), "0:00 - Some Song - A");
+
+        // nothing to go on but the title
+        assert_eq!(single_track_line("Just A Title", ""), "0:00 - Just A Title");
+
+        // a real title, exactly as yt-dlp reports it (two bracketed noise groups)
+        assert_eq!(
+            single_track_line("Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)", "Rick Astley"),
+            "0:00 - Never Gonna Give You Up - Rick Astley"
+        );
     }
 
     #[test]

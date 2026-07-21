@@ -187,15 +187,24 @@ app.innerHTML = /* html */ `
         <button data-d="0.01">+10</button><button data-d="0.1">+100</button><button data-d="1">+1s</button>
       </div>
       <div id="tuneZoom" class="tunezoom" title="Click to set the start time"></div>
-      <div class="zoomscale muted"><span id="zoomA">–</span><span>10 s window</span><span id="zoomB">–</span></div>
+      <div class="zoomscale muted">
+        <span id="zoomA">–</span>
+        <span class="zoomctl">
+          <button id="tzOut" class="ghost tiny" title="Zoom out">−</button>
+          <span id="tzLabel" class="zoomlabel">10 s</span>
+          <button id="tzIn" class="ghost tiny" title="Zoom in">+</button>
+        </span>
+        <span id="zoomB">–</span>
+      </div>
       <div class="row wrap">
         <button id="tunePlayPre" class="ghost">▶ Play run-up (3 s before the cut)</button>
         <button id="tunePlayAt" class="ghost">▶ Play from the new start</button>
         <button id="tuneStop" class="ghost">■ Stop</button>
       </div>
-      <p class="hint">Nudge until the cut lands cleanly, then apply. Written to the tracklist
-        as <code>mm:ss.mmm</code>. Note that audio codecs are frame-based, so the final cut
-        snaps to the nearest packet — expect it to land within ~20 ms of your value.</p>
+      <p class="hint">Scroll over the waveform to zoom · click it to set the start · nudge until
+        the cut lands cleanly, then apply. Written to the tracklist as <code>mm:ss.mmm</code>.
+        Note that audio codecs are frame-based, so the final cut snaps to the nearest packet —
+        expect it to land within ~20 ms of your value.</p>
       <div class="tuneactions">
         <button id="tuneCancel" class="ghost">Cancel</button>
         <button id="tuneApply" class="primary">Apply</button>
@@ -471,13 +480,28 @@ async function detect() {
   logLine("Scanning description + comments for a tracklist…");
   const cands = await api.detect(info);
   if (cands.length === 0) {
+    // No tracklist at all — most likely a single-song video. Guess one track from the
+    // title/uploader rather than leaving the user with nothing.
+    const line = await api.singleTrackFallback(info.title, info.uploader).catch(() => "");
     tlFeedback.className = "feedback warn";
-    tlFeedback.textContent =
-      "No tracklist detected in the description or top comments. Paste one below — it parses as you type.";
-    tlText.value = "";
-    logLine("No tracklist detected — paste one manually.");
-    ($("#rawDetails") as HTMLDetailsElement).open = true; // they'll need the editor now
-    await reparse();
+    if (line) {
+      tlText.value = line;
+      originalText = line; // it's our guess, not a user edit
+      await reparse();
+      const t = tracks[0];
+      tlFeedback.innerHTML =
+        `No tracklist found — treating this as a <b>single track</b>, guessed from the video title` +
+        `${t ? `: “${escapeHtml(t.title)}”${t.artist ? ` by ${escapeHtml(t.artist)}` : ""}` : ""}. ` +
+        `Adjust it below if that's wrong.`;
+      logLine(`No tracklist detected — falling back to a single track: ${line}`);
+    } else {
+      tlFeedback.textContent =
+        "No tracklist detected in the description or top comments. Paste one below — it parses as you type.";
+      tlText.value = "";
+      logLine("No tracklist detected — paste one manually.");
+      ($("#rawDetails") as HTMLDetailsElement).open = true;
+      await reparse();
+    }
     return;
   }
   ($("#rawDetails") as HTMLDetailsElement).open = false;
@@ -1031,10 +1055,38 @@ function updatePlayhead() {
 const tuneDlg = $<HTMLDialogElement>("#tuneDlg");
 const tuneInput = $<HTMLInputElement>("#tuneInput");
 const tuneZoom = $("#tuneZoom");
-const ZOOM_HALF = 5; // seconds shown either side of the original position
 let tuneIdx = -1;
-let tuneOrig = 0;
-let tuneVal = 0;
+let tuneOrig = 0; // the track's original start
+let tuneVal = 0; // the candidate start being edited
+let tuneHalf = 5; // zoom: seconds either side of the window centre
+let tuneCentre = 0; // window centre (follows the value if it's nudged out of view)
+let tuneWinStart = 0;
+let tuneWinEnd = 0;
+
+/** Compute the visible window, CLAMPED to the file — the backend clamps the waveform the
+ *  same way, so both agree. (Without this, a track at 0:00 asked for -5s..+5s while the
+ *  image actually showed 0..10s, putting every marker 5 seconds out.) */
+function tuneWindow() {
+  const dur = previewDuration() || tuneCentre + tuneHalf * 2;
+  const span = Math.min(dur, tuneHalf * 2);
+  let s = Math.max(0, tuneCentre - span / 2);
+  const e = Math.min(dur, s + span);
+  s = Math.max(0, e - span); // pull back if we hit the end
+  tuneWinStart = s;
+  tuneWinEnd = e;
+}
+/** time -> % across the visible window */
+const tunePct = (t: number) => ((t - tuneWinStart) / (tuneWinEnd - tuneWinStart)) * 100;
+
+/** Change the candidate value, panning the window if it would fall out of view. */
+function setTuneVal(v: number) {
+  tuneVal = Math.max(0, Math.round(v * 1000) / 1000);
+  if (tuneVal < tuneWinStart || tuneVal > tuneWinEnd) {
+    tuneCentre = tuneVal;
+    scheduleTuneWave();
+  }
+  renderTune();
+}
 
 previewEl.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest("button[data-edit]") as HTMLElement | null;
@@ -1050,47 +1102,85 @@ function openTune(i: number) {
   tuneIdx = i;
   tuneOrig = t.start;
   tuneVal = t.start;
+  tuneHalf = 5;
+  tuneCentre = t.start;
   $("#tuneTitle").textContent = `Fine-tune “${t.title || "(untitled)"}”`;
-  $("#zoomA").textContent = hms(Math.max(0, tuneOrig - ZOOM_HALF));
-  $("#zoomB").textContent = hms(tuneOrig + ZOOM_HALF);
   tuneZoom.style.backgroundImage = "none";
   renderTune();
   tuneDlg.showModal();
-  // ~0.02s to render, so just fetch it on open
-  if (info) {
-    api
-      .waveformWindow(info.id, tuneOrig, ZOOM_HALF, 900)
-      .then((p) => (tuneZoom.style.backgroundImage = `url("${convertFileSrc(p)}")`))
-      .catch(() => {});
-  }
+  loadTuneWave();
 }
 
 function renderTune() {
+  tuneWindow();
   tuneInput.value = hms(tuneVal);
   const d = tuneVal - tuneOrig;
   $("#tuneDelta").textContent = d === 0 ? "unchanged" : `${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(3)} s`;
-  const winStart = tuneOrig - ZOOM_HALF;
-  const pos = ((tuneVal - winStart) / (ZOOM_HALF * 2)) * 100;
-  const play = ((audio.currentTime - winStart) / (ZOOM_HALF * 2)) * 100;
+
+  const span = tuneWinEnd - tuneWinStart;
+  $("#zoomA").textContent = hms(tuneWinStart);
+  $("#zoomB").textContent = hms(tuneWinEnd);
+  $("#tzLabel").textContent = span >= 60 ? hms(span) : `${span < 2 ? span.toFixed(2) : Math.round(span)} s`;
+
+  const clamp = (p: number) => Math.min(100, Math.max(0, p));
+  const orig = tunePct(tuneOrig);
+  const pos = tunePct(tuneVal);
+  const play = tunePct(audio.currentTime);
   const ticks = Array.from({ length: 11 }, (_, k) => `<div class="ztick" style="left:${k * 10}%"></div>`).join("");
   tuneZoom.innerHTML =
     ticks +
-    `<div class="zorig" style="left:${(ZOOM_HALF / (ZOOM_HALF * 2)) * 100}%"></div>` +
-    `<div class="zmark" style="left:${Math.min(100, Math.max(0, pos))}%"></div>` +
+    // the original position is only drawn when it's actually inside the window
+    (orig >= 0 && orig <= 100 ? `<div class="zorig" style="left:${orig}%"></div>` : "") +
+    `<div class="zmark" style="left:${clamp(pos)}%"></div>` +
     (play >= 0 && play <= 100 ? `<div class="zplay" style="left:${play}%"></div>` : "");
 }
+
+let tuneWaveTimer: number | undefined;
+function scheduleTuneWave() {
+  clearTimeout(tuneWaveTimer);
+  tuneWaveTimer = window.setTimeout(loadTuneWave, 150);
+}
+async function loadTuneWave() {
+  if (!info) return;
+  tuneWindow();
+  try {
+    const p = await api.waveformWindow(
+      info.id,
+      (tuneWinStart + tuneWinEnd) / 2,
+      (tuneWinEnd - tuneWinStart) / 2,
+      900
+    );
+    tuneZoom.style.backgroundImage = `url("${convertFileSrc(p)}")`;
+  } catch {
+    /* waveform is a nicety */
+  }
+}
+
+function tuneZoomBy(factor: number) {
+  const dur = previewDuration() || 60;
+  tuneHalf = Math.min(dur / 2, Math.max(0.25, tuneHalf * factor));
+  renderTune();
+  scheduleTuneWave();
+}
+$("#tzIn").addEventListener("click", () => tuneZoomBy(0.5));
+$("#tzOut").addEventListener("click", () => tuneZoomBy(2));
+// Nothing else scrolls inside the dialog, so a plain wheel zooms here.
+tuneZoom.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    tuneZoomBy(e.deltaY > 0 ? 1.3 : 0.77);
+  },
+  { passive: false }
+);
 
 tuneZoom.addEventListener("click", (e) => {
   const r = tuneZoom.getBoundingClientRect();
   const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-  tuneVal = Math.max(0, tuneOrig - ZOOM_HALF + ratio * ZOOM_HALF * 2);
-  renderTune();
+  setTuneVal(tuneWinStart + ratio * (tuneWinEnd - tuneWinStart));
 });
 tuneDlg.querySelectorAll<HTMLElement>(".nudges button").forEach((b) =>
-  b.addEventListener("click", () => {
-    tuneVal = Math.max(0, Math.round((tuneVal + Number(b.dataset.d)) * 1000) / 1000);
-    renderTune();
-  })
+  b.addEventListener("click", () => setTuneVal(tuneVal + Number(b.dataset.d)))
 );
 tuneInput.addEventListener("change", () => {
   const v = parseHms(tuneInput.value);
@@ -1099,8 +1189,7 @@ tuneInput.addEventListener("change", () => {
     return;
   }
   tuneInput.classList.remove("bad");
-  tuneVal = v;
-  renderTune();
+  setTuneVal(v);
 });
 
 $("#tunePlayPre").addEventListener("click", () => seekTo(Math.max(0, tuneVal - 3)));

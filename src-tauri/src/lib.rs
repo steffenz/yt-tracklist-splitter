@@ -29,6 +29,7 @@ pub fn run() {
             commands::detect_tracklists,
             commands::parse_tracklist,
             commands::set_track_time,
+            commands::single_track_fallback,
             commands::get_thumbnail,
             commands::prepare_preview,
             commands::cached_preview,
