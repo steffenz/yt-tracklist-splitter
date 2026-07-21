@@ -53,7 +53,14 @@ own uploads, or material that is explicitly free of restrictions).
 
 ## Requirements
 
-Nothing to install to *use* the app — `yt-dlp` and `ffmpeg`/`ffprobe` are **bundled**.
+**Nothing at all** — `yt-dlp`, `ffmpeg`/`ffprobe`, and `deno` are all **bundled**, and the
+app points yt-dlp at them explicitly (a packaged app has no `PATH` to find them on).
+
+Deno is included because yt-dlp needs a JavaScript runtime to solve YouTube's JS
+challenges; without one, extraction is deprecated and *"some formats may be missing"*.
+It's the reason the download is chunky (~200 MB of sidecars) — the trade for an app that
+works out of the box with zero setup. If you happen to have Deno or Node installed
+system-wide, the app will use the bundled copy regardless.
 
 To build from source you need:
 
@@ -109,6 +116,56 @@ secrets + notarization to the workflow later).
 > requesting one queues forever rather than failing. Supporting Intel Macs would mean a
 > universal (`universal-apple-darwin`) build, which also needs `lipo`-merged universal
 > ffmpeg/ffprobe sidecars. Apple-Silicon-only is usually fine for a personal tool.
+
+---
+
+## First launch on macOS (unsigned build)
+
+macOS attaches an extended attribute called `com.apple.quarantine` to **anything
+downloaded from the internet**. Gatekeeper reads that flag and — because this app isn't
+signed with an Apple Developer certificate or notarized by Apple — refuses to open it.
+On Apple Silicon the message is often the misleading *"app is damaged and can't be opened.
+You should move it to the Trash."* The app isn't damaged; it's just unsigned and flagged.
+
+### The GUI way (try this first)
+
+macOS 15 (Sequoia) removed the old Control-click → *Open* shortcut, so the current path is:
+
+1. Drag the app to **Applications** and double-click it — it gets blocked.
+2. Open **System Settings → Privacy & Security**.
+3. Scroll to **Security**; you'll see *"yt-tracklist-splitter was blocked to protect your Mac."*
+4. Click **Open Anyway**, authenticate, then confirm **Open** in the dialog.
+
+On macOS 14 and older, Control-click (right-click) the app → **Open** → **Open** works too.
+
+### The Terminal way (always works)
+
+If you got the *"damaged"* message, macOS often won't offer **Open Anyway** — strip the
+quarantine flag directly:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/yt-tracklist-splitter.app
+```
+
+What each part does:
+
+| Part | Meaning |
+|------|---------|
+| `xattr` | macOS tool for reading/writing **extended attributes** — hidden metadata attached to a file alongside its contents |
+| `-d` | **delete** the named attribute |
+| `-r` | **recurse** — a `.app` is really a folder of hundreds of files, and the flag can be on any of them |
+| `com.apple.quarantine` | the specific attribute macOS adds to downloaded files; the one Gatekeeper checks |
+| `/Applications/…app` | the installed app to clean |
+
+Check it worked — this lists remaining attributes, and should print nothing:
+
+```bash
+xattr -l /Applications/yt-tracklist-splitter.app
+```
+
+> **Why not just sign it?** Proper signing + notarization needs an Apple Developer account
+> ($99/yr). With one, you'd add the signing secrets to the release workflow and none of
+> this would be necessary.
 
 ---
 

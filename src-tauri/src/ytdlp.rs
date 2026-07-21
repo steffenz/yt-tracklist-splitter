@@ -10,6 +10,72 @@ use tauri::AppHandle;
 
 static PCT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[download\]\s+([\d.]+)%").unwrap());
 
+/// Directory holding the bundled sidecars. Tauri places them next to the app executable
+/// with clean names in BOTH dev (`target/debug/ffmpeg`) and a packaged bundle
+/// (`…app/Contents/MacOS/ffmpeg`), so this works in either case.
+fn sidecar_dir() -> Option<PathBuf> {
+    std::env::current_exe().ok()?.parent().map(|p| p.to_path_buf())
+}
+
+/// Point yt-dlp at our bundled ffmpeg. A packaged app has no ffmpeg on PATH, which makes
+/// yt-dlp's post-processing fail outright and restricts format selection.
+fn ffmpeg_location() -> Vec<String> {
+    let Some(dir) = sidecar_dir() else { return vec![] };
+    let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    if dir.join(exe).exists() {
+        vec!["--ffmpeg-location".into(), dir.to_string_lossy().into_owned()]
+    } else {
+        vec![]
+    }
+}
+
+/// yt-dlp needs a JavaScript runtime to solve YouTube's JS challenges (without one,
+/// extraction is deprecated and some formats go missing). A packaged app gets a minimal
+/// PATH, so probe the usual install locations and point yt-dlp at whatever we find.
+fn js_runtime() -> Vec<String> {
+    let arg = |name: &str, path: &Path| {
+        vec!["--js-runtimes".to_string(), format!("{name}:{}", path.display())]
+    };
+    // 1. shipped next to the app (if we ever bundle one)
+    if let Some(dir) = sidecar_dir() {
+        for name in ["deno", "node", "bun"] {
+            let p = dir.join(name);
+            if p.exists() {
+                return arg(name, &p);
+            }
+        }
+    }
+    // 2. common system install locations
+    for (name, path) in [
+        ("deno", "/opt/homebrew/bin/deno"),
+        ("deno", "/usr/local/bin/deno"),
+        ("deno", "/usr/bin/deno"),
+        ("node", "/opt/homebrew/bin/node"),
+        ("node", "/usr/local/bin/node"),
+        ("node", "/usr/bin/node"),
+    ] {
+        let p = Path::new(path);
+        if p.exists() {
+            return arg(name, p);
+        }
+    }
+    // 3. per-user deno install
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home).join(".deno/bin/deno");
+        if p.exists() {
+            return arg("deno", &p);
+        }
+    }
+    vec![]
+}
+
+/// Args every yt-dlp invocation should carry so the packaged app behaves like dev.
+fn common_args() -> Vec<String> {
+    let mut v = ffmpeg_location();
+    v.extend(js_runtime());
+    v
+}
+
 fn normalize_ext(ext: &str) -> String {
     match ext.to_lowercase().as_str() {
         "webm" | "opus" | "ogg" => "opus".into(),
@@ -82,19 +148,16 @@ fn parse_comments(v: &Value) -> Vec<Comment> {
 }
 
 pub async fn fetch_info(app: &AppHandle, url: &str) -> Result<VideoInfo, String> {
-    let (ok, stdout, stderr) = sh::capture(
-        app,
-        "yt-dlp",
-        vec![
-            "--no-playlist".into(),
-            "--dump-single-json".into(),
-            "--write-comments".into(),
-            "--extractor-args".into(),
-            "youtube:comment_sort=top;max_comments=150,150,0".into(),
-            url.into(),
-        ],
-    )
-    .await?;
+    let mut args = vec![
+        "--no-playlist".to_string(),
+        "--dump-single-json".into(),
+        "--write-comments".into(),
+        "--extractor-args".into(),
+        "youtube:comment_sort=top;max_comments=150,150,0".into(),
+    ];
+    args.extend(common_args());
+    args.push(url.into());
+    let (ok, stdout, stderr) = sh::capture(app, "yt-dlp", args).await?;
     if !ok {
         return Err(format!("yt-dlp could not read this URL:\n{}", sh::tail(&stderr, 6)));
     }
@@ -130,18 +193,18 @@ pub async fn download_native<F: FnMut(f64, String)>(
 ) -> Result<PathBuf, String> {
     let out_tmpl = dir.join(format!("raw_{vid}.%(ext)s"));
     let mut errbuf = String::new();
+    let mut args = vec![
+        "-f".to_string(),
+        "bestaudio/best".into(),
+        "--no-playlist".into(),
+        "--newline".into(),
+    ];
+    args.extend(common_args());
+    args.extend(["-o".to_string(), out_tmpl.to_string_lossy().into_owned(), url.into()]);
     let ok = sh::stream(
         app,
         "yt-dlp",
-        vec![
-            "-f".into(),
-            "bestaudio/best".into(),
-            "--no-playlist".into(),
-            "--newline".into(),
-            "-o".into(),
-            out_tmpl.to_string_lossy().into_owned(),
-            url.into(),
-        ],
+        args,
         |line, is_err| {
             if let Some(c) = PCT_RE.captures(&line) {
                 if let Ok(p) = c[1].parse::<f64>() {
@@ -172,32 +235,32 @@ pub async fn download_native<F: FnMut(f64, String)>(
         .ok_or_else(|| "download produced no file".into())
 }
 
-/// Fetch the video thumbnail as a jpg into cache; returns its path.
+/// Find an already-downloaded thumbnail for this video, whatever extension it has.
+fn find_thumbnail(dir: &Path, vid: &str) -> Option<PathBuf> {
+    let prefix = format!("thumbraw_{vid}.");
+    std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
+        p.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with(&prefix)).unwrap_or(false)
+    })
+}
+
+/// Fetch the video thumbnail into cache (in whatever format YouTube serves — usually
+/// webp). We deliberately do NOT use yt-dlp's `--convert-thumbnails`: that's an ffmpeg
+/// post-processor, and our own ffmpeg converts it while cropping the cover anyway.
 pub async fn get_thumbnail(app: &AppHandle, url: &str, vid: &str, dir: &Path) -> Result<PathBuf, String> {
-    let final_jpg = dir.join(format!("thumbraw_{vid}.jpg"));
-    if final_jpg.exists() {
-        return Ok(final_jpg);
+    if let Some(p) = find_thumbnail(dir, vid) {
+        return Ok(p);
     }
     let out_tmpl = dir.join(format!("thumbraw_{vid}.%(ext)s"));
-    let (ok, _out, stderr) = sh::capture(
-        app,
-        "yt-dlp",
-        vec![
-            "--no-playlist".into(),
-            "--skip-download".into(),
-            "--write-thumbnail".into(),
-            "--convert-thumbnails".into(),
-            "jpg".into(),
-            "-o".into(),
-            out_tmpl.to_string_lossy().into_owned(),
-            url.into(),
-        ],
-    )
-    .await?;
-    if !ok || !final_jpg.exists() {
-        return Err(format!("could not fetch thumbnail:\n{}", sh::tail(&stderr, 4)));
-    }
-    Ok(final_jpg)
+    let mut args = vec![
+        "--no-playlist".to_string(),
+        "--skip-download".into(),
+        "--write-thumbnail".into(),
+    ];
+    args.extend(common_args());
+    args.extend(["-o".to_string(), out_tmpl.to_string_lossy().into_owned(), url.into()]);
+    let (_ok, _out, stderr) = sh::capture(app, "yt-dlp", args).await?;
+    find_thumbnail(dir, vid)
+        .ok_or_else(|| format!("could not fetch thumbnail:\n{}", sh::tail(&stderr, 4)))
 }
 
 pub async fn version(app: &AppHandle) -> Result<String, String> {
