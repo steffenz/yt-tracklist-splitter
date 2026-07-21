@@ -44,6 +44,10 @@ app.innerHTML = /* html */ `
         <h2><span class="step">2</span> Tracklist &amp; preview</h2>
         <div id="tlFeedback" class="feedback"></div>
         <div id="candidates" class="candidates"></div>
+        <div id="editedNote" class="editednote hidden">
+          ✎ <b>You've edited this tracklist.</b> Switching source or fetching another video
+          will discard your changes.
+        </div>
         <div class="preview-grid">
           <div class="preview-video">
             <div id="previewIdle" class="preview-idle">
@@ -303,6 +307,8 @@ function resetUI() {
   tlFeedback.className = "feedback";
   candidatesEl.innerHTML = "";
   tlText.value = "";
+  originalText = "";
+  updateEditedState();
   previewEl.innerHTML = "";
   trackCount.textContent = "0";
   albumEl.value = "";
@@ -329,6 +335,7 @@ function resetUI() {
 async function doFetch() {
   const url = urlEl.value.trim();
   if (!url) return;
+  if (!(await confirmDiscardEdits("Fetching another video"))) return;
   resetUI();
   setBusy(true, "Fetching video info and scanning comments… (this can take a few seconds)");
   logLine(`Fetching ${url} …`);
@@ -432,18 +439,38 @@ function candidateChip(c: TracklistCandidate, best: boolean): HTMLElement {
     <span class="chip-meta">${c.tracks.length} tracks · ${hms(c.first_ts)}–${hms(c.last_ts)}${
       c.pinned ? " · 📌" : ""
     }${c.like_count > 0 ? ` · ♥ ${c.like_count}` : ""}</span>`;
-  el.addEventListener("click", () => {
+  el.addEventListener("click", async () => {
+    if (!(await selectCandidate(c))) return; // user kept their edits
     document.querySelectorAll(".chip").forEach((n) => n.classList.remove("active"));
     el.classList.add("active");
-    selectCandidate(c);
   });
   if (best) el.classList.add("active");
   return el;
 }
 
-function selectCandidate(c: TracklistCandidate) {
-  tlText.value = c.raw_text.trim();
-  reparse();
+/** Raw text of the source currently loaded, so we can tell when the user has edited it. */
+let originalText = "";
+const isModified = () => originalText !== "" && tlText.value.trim() !== originalText.trim();
+
+function updateEditedState() {
+  $("#editedNote").classList.toggle("hidden", !isModified());
+}
+
+/** Ask before throwing away edits. Returns false if the user wants to keep them. */
+async function confirmDiscardEdits(what: string): Promise<boolean> {
+  if (!isModified()) return true;
+  return await confirm(
+    `Discard your edits?\n\nYou've changed the tracklist text. ${what} will replace it with the original.`,
+    { title: "Unsaved changes", kind: "warning", okLabel: "Discard", cancelLabel: "Keep editing" }
+  );
+}
+
+async function selectCandidate(c: TracklistCandidate): Promise<boolean> {
+  if (!(await confirmDiscardEdits("Loading this source"))) return false;
+  originalText = c.raw_text.trim();
+  tlText.value = originalText;
+  await reparse();
+  return true;
 }
 
 let reparseTimer: number | undefined;
@@ -486,6 +513,7 @@ async function reparse() {
         )}</span>${t.artist ? ` <span class="partist">— ${escapeHtml(t.artist)}</span>` : ""}</li>`
     )
     .join("");
+  updateEditedState();
   renderTimeline();
 }
 
@@ -625,9 +653,10 @@ timelineEl.addEventListener("mousemove", (e) => {
   const t = timeAtEvent(e, dur);
   const idx = trackAt(t);
   const trk = idx >= 0 ? tracks[idx] : null;
-  tip.innerHTML = trk
-    ? `<b>${escapeHtml(trk.title || "(untitled)")}</b>${trk.artist ? ` — ${escapeHtml(trk.artist)}` : ""}<span class="tt">${hms(t)}</span>`
-    : `<span class="tt">${hms(t)}</span>`;
+  const name = trk
+    ? `<b>${escapeHtml(trk.title || "(untitled)")}</b>${trk.artist ? ` — ${escapeHtml(trk.artist)}` : ""}`
+    : "";
+  tip.innerHTML = `${name ? `<span class="tt-name">${name}</span>` : ""}<span class="tt">${hms(t)}</span>`;
   tip.classList.remove("hidden");
   const r = timelineEl.getBoundingClientRect();
   tip.style.left = `${Math.min(window.innerWidth - tip.offsetWidth - 8, Math.max(8, e.clientX - tip.offsetWidth / 2))}px`;
