@@ -213,20 +213,32 @@ signature.) For local development, just re-run `npm run fetch-binaries`.
 
 ## Roadmap / known limitations
 
-- **The video preview is a YouTube embed**, which requires a real `http://` origin and is
-  subject to YouTube's embedding rules. Some videos disallow embedding outright (player
-  errors 101/150), and the embed can break whenever those rules change — it's inherently
-  a moving target.
-- **Planned: a self-sufficient preview.** Play the *already-downloaded* native audio
-  locally (the same cached file the splitter uses), with the chapter list as seek markers.
-  Previewing would then warm the cache, making the subsequent split instant — no second
-  download. Immune to embed policy, origin checks, and offline-safe.
-- **Planned: optional low-res video fetch.** After the audio, optionally pull a low-res
-  video stream for a real visual preview, for people who want the picture.
+- **Cut precision.** Boundaries land within ~20 ms when stream-copying, because audio
+  codecs are frame-based and a copy can only cut on packet boundaries. Converting formats
+  (including `flac`) re-encode and so are sample-accurate; "Precise cuts" forces that even
+  when the codec matches.
+
+- **Planned: playlist support.** When the pasted URL contains a playlist (`?list=…`) *and*
+  no tracklist is found in the video itself, offer to build the tracklist from the
+  **playlist entries** — one track per video — instead of falling back to a single track.
+  A playlist of individual songs is effectively an album.
+
+  ⚠️ *This is not a small change.* The whole pipeline currently assumes **one source file
+  cut into time ranges**; a playlist means **N separate downloads, one per track**, so the
+  job needs a second shape (per-entry download → tag → write, no slicing). The tagging,
+  cover-art, numbering and output-folder logic is all reusable, but `run_job` and the
+  cache keying are not. Entries can be enumerated cheaply with
+  `yt-dlp --flat-playlist --dump-single-json` (title/uploader/duration per entry, no
+  media download), which is enough to render the track list before committing to anything.
+  Note the app currently passes `--no-playlist` to every yt-dlp call by design.
+
+- **Planned: optional low-res video fetch.** The preview is audio-only (a deliberate
+  choice — it reuses the audio the splitter already needs). Optionally pulling a low-res
+  video stream afterwards would give a real visual preview.
+
 - **Planned: GIF/clip slicer.** Cut short clips or GIFs from the set. This *requires* a
-  real local video file — frames can't be extracted from an embedded player — so it
-  depends on the optional video fetch above. If the tool grows beyond tracklist splitting,
-  a rename (e.g. `yt-slicer`) probably makes sense.
+  real local video file, so it depends on the optional video fetch above. If the tool
+  grows beyond tracklist splitting, a rename (e.g. `yt-slicer`) probably makes sense.
 
 ## License
 
