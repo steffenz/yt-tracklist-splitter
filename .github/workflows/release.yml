@@ -15,8 +15,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # NOTE: no Intel-mac job. GitHub has retired the free Intel macOS runners
+          # (`macos-13`), and a job with an unavailable label queues forever instead of
+          # failing. Intel support would need a universal build (see README).
           - os: macos-latest   # Apple Silicon  -> .dmg / .app (aarch64)
-          - os: macos-13       # Intel          -> .dmg / .app (x86_64)
           - os: ubuntu-22.04   # Linux          -> .AppImage / .deb
           - os: windows-latest # Windows        -> .msi / .exe
     runs-on: ${{ matrix.os }}

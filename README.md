@@ -92,17 +92,23 @@ Produces a native bundle for the current OS (`.dmg`/`.app` on macOS, `.msi` on W
 ## Releasing (DMG / MSI / AppImage via GitHub Actions)
 
 Installers are built on GitHub's runners, not your machine — [`.github/workflows/release.yml`](.github/workflows/release.yml)
-builds macOS (Apple Silicon + Intel), Windows, and Linux in parallel and attaches the
-bundles to a **draft GitHub Release**.
+builds macOS (Apple Silicon), Windows, and Linux in parallel and attaches the bundles to a
+**draft GitHub Release**.
 
 1. Bump `version` in `src-tauri/tauri.conf.json`.
 2. Push a tag: `git tag v0.1.0 && git push origin v0.1.0` (or run the workflow manually
    from the **Actions** tab).
-3. Review the draft Release it creates and publish it.
+3. Go to **Releases**, open the draft, and click **Publish release** — until you publish,
+   the files are visible only to you and aren't publicly downloadable.
 
 Each runner fetches its own sidecars, so nothing binary lives in the repo. Builds are
 **unsigned** — macOS users right-click → *Open* on first launch (or add Apple signing
 secrets + notarization to the workflow later).
+
+> **No Intel-mac build.** GitHub retired the free Intel macOS runners (`macos-13`); a job
+> requesting one queues forever rather than failing. Supporting Intel Macs would mean a
+> universal (`universal-apple-darwin`) build, which also needs `lipo`-merged universal
+> ffmpeg/ffprobe sidecars. Apple-Silicon-only is usually fine for a personal tool.
 
 ---
 
