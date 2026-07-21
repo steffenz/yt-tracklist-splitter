@@ -28,6 +28,8 @@ export interface Track {
   artist: string;
   /** Deselected tracks are skipped entirely (no ffmpeg run for them). */
   selected: boolean;
+  /** 0-based source line, so the fine-tune editor can rewrite that exact line. */
+  line: number;
 }
 
 export interface TracklistCandidate {
@@ -61,6 +63,8 @@ export interface JobConfig {
   tracks: Track[];
   audio_format: string;
   source_abr: number;
+  /** Force re-encoding for sample-accurate cut boundaries. */
+  precise_cuts: boolean;
   album: string;
   album_artist: string;
   cover_mode: "none" | "youtube" | "custom";
@@ -90,11 +94,16 @@ export const api = {
   fetchInfo: (url: string) => invoke<VideoInfo>("fetch_info", { url }),
   detect: (info: VideoInfo) => invoke<TracklistCandidate[]>("detect_tracklists", { info }),
   parse: (text: string, opts: ParseOptions) => invoke<Track[]>("parse_tracklist", { text, opts }),
+  setTrackTime: (text: string, line: number, seconds: number) =>
+    invoke<string>("set_track_time", { text, line, seconds }),
   getThumbnail: (url: string, videoId: string) =>
     invoke<string>("get_thumbnail", { url, videoId }),
   preparePreview: (url: string, videoId: string, forceEncode: boolean) =>
     invoke<PreviewInfo>("prepare_preview", { url, videoId, forceEncode }),
   cachedPreview: (videoId: string) => invoke<PreviewInfo | null>("cached_preview", { videoId }),
+  waveform: (videoId: string, width: number) => invoke<string>("waveform", { videoId, width }),
+  waveformWindow: (videoId: string, center: number, half: number, width: number) =>
+    invoke<string>("waveform_window", { videoId, center, half, width }),
   defaultOutputDir: (album: string) => invoke<string>("default_output_dir", { album }),
   ytdlpVersion: () => invoke<string>("ytdlp_version"),
   clearCache: () => invoke<number>("clear_cache"),

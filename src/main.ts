@@ -71,8 +71,17 @@ app.innerHTML = /* html */ `
                   <span class="sw-track"><span class="sw-knob"></span></span>
                   <span class="sw-label">Seek mode</span>
                 </label>
+                <span class="zoomctl">
+                  <button id="zoomOut" class="ghost tiny" title="Zoom out">−</button>
+                  <span id="zoomLabel" class="zoomlabel">full</span>
+                  <button id="zoomIn" class="ghost tiny" title="Zoom in">+</button>
+                  <button id="zoomFit" class="ghost tiny" title="Show the whole set">Fit</button>
+                </span>
               </div>
               <div id="timeline" class="timeline"></div>
+              <div id="minimap" class="minimap" title="Whole set — click or drag to move the view">
+                <div id="mmWin" class="mm-win"></div>
+              </div>
               <p class="hint tlhint" id="tlHint"></p>
               <p id="previewNote" class="previewnote hidden">
                 ℹ︎ This preview had to be re-encoded to a reduced-quality mono copy so it
@@ -83,12 +92,9 @@ app.innerHTML = /* html */ `
           </div>
           <div class="tl-right">
             <div class="chapters-head">
-              <label class="lbl nomargin">Chapters — <span id="selCount">0</span> of <span id="trackCount">0</span> selected
-                <span class="muted">(click a row to jump · tick to choose what gets extracted)</span></label>
-              <span class="selbtns">
-                <button id="btnSelAll" class="ghost tiny">All</button>
-                <button id="btnSelNone" class="ghost tiny">None</button>
-              </span>
+              <input type="checkbox" id="pickAll" class="pick" title="Select all / none" />
+              <span class="lbl nomargin">Chapters — <span id="selCount">0</span> of <span id="trackCount">0</span> selected
+                <span class="muted">· click a row to jump · ✎ to fine-tune the start time</span></span>
             </div>
             <ol id="preview" class="preview"></ol>
           </div>
@@ -147,7 +153,10 @@ app.innerHTML = /* html */ `
           </label>
         </div>
         <p class="hint" id="formatHint"></p>
+        <p id="precisionNote" class="warnnote hidden"></p>
         <div class="row wrap opts">
+          <label class="chk" title="Re-encode instead of stream-copying, so cuts land exactly where you set them">
+            <input type="checkbox" id="preciseCuts" /> Precise cuts <span class="muted">(re-encode for exact boundaries)</span></label>
           <label class="chk"><input type="checkbox" id="keepFull" /> Also save the full unsplit set</label>
           <label class="chk"><input type="checkbox" id="cleanCache" /> Delete this video's cache after running</label>
         </div>
@@ -165,6 +174,33 @@ app.innerHTML = /* html */ `
         </div>
       </section>
     </section>
+
+    <dialog id="tuneDlg" class="tune">
+      <h3 id="tuneTitle">Fine-tune start</h3>
+      <div class="tunerow">
+        <input id="tuneInput" type="text" spellcheck="false" />
+        <span id="tuneDelta" class="muted"></span>
+      </div>
+      <div class="nudges">
+        <button data-d="-1">−1s</button><button data-d="-0.1">−100</button><button data-d="-0.01">−10</button>
+        <span class="nudge-unit muted">ms</span>
+        <button data-d="0.01">+10</button><button data-d="0.1">+100</button><button data-d="1">+1s</button>
+      </div>
+      <div id="tuneZoom" class="tunezoom" title="Click to set the start time"></div>
+      <div class="zoomscale muted"><span id="zoomA">–</span><span>10 s window</span><span id="zoomB">–</span></div>
+      <div class="row wrap">
+        <button id="tunePlayPre" class="ghost">▶ Play run-up (3 s before the cut)</button>
+        <button id="tunePlayAt" class="ghost">▶ Play from the new start</button>
+        <button id="tuneStop" class="ghost">■ Stop</button>
+      </div>
+      <p class="hint">Nudge until the cut lands cleanly, then apply. Written to the tracklist
+        as <code>mm:ss.mmm</code>. Note that audio codecs are frame-based, so the final cut
+        snaps to the nearest packet — expect it to land within ~20 ms of your value.</p>
+      <div class="tuneactions">
+        <button id="tuneCancel" class="ghost">Cancel</button>
+        <button id="tuneApply" class="primary">Apply</button>
+      </div>
+    </dialog>
 
     <section class="card debug">
       <div class="debug-head">
@@ -197,6 +233,7 @@ const albumEl = $<HTMLInputElement>("#album");
 const albumArtistEl = $<HTMLInputElement>("#albumArtist");
 const outdirEl = $<HTMLInputElement>("#outdir");
 const keepFullEl = $<HTMLInputElement>("#keepFull");
+const preciseEl = $<HTMLInputElement>("#preciseCuts");
 const cleanCacheEl = $<HTMLInputElement>("#cleanCache");
 const btnRun = $<HTMLButtonElement>("#btnRun");
 const btnCancel = $<HTMLButtonElement>("#btnCancel");
@@ -217,13 +254,24 @@ let lastOutdir: string | null = null;
 const crop = new CropBox($("#cropWrap"));
 
 // ---- helpers -----------------------------------------------------------------
+/** Shows milliseconds only when there are any, so whole-second times stay clean. */
 const hms = (s: number) => {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
+  const sec = s % 60;
+  const whole = Math.floor(sec);
+  const ms = Math.round((sec - whole) * 1000);
   const mm = String(m).padStart(2, "0");
-  const ss = String(sec).padStart(2, "0");
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  const ss = String(whole).padStart(2, "0");
+  const frac = ms > 0 ? `.${String(ms).padStart(3, "0")}` : "";
+  return h > 0 ? `${h}:${mm}:${ss}${frac}` : `${mm}:${ss}${frac}`;
+};
+
+/** Parse `mm:ss`, `h:mm:ss`, either with optional `.mmm`. */
+const parseHms = (v: string): number | null => {
+  const m = v.trim().match(/^(?:(\d{1,3}):)?(\d{1,3}):(\d{1,2}(?:\.\d+)?)$/);
+  if (!m) return null;
+  return (m[1] ? Number(m[1]) * 3600 : 0) + Number(m[2]) * 60 + Number(m[3]);
 };
 const isImage = (p: string) => /\.(jpe?g|png|webp|gif|bmp|tiff?)$/i.test(p);
 const setStatus = (msg: string, kind: "" | "err" | "ok" = "") => {
@@ -329,6 +377,11 @@ function resetUI() {
   audio.load();
   previewState("idle");
   timelineEl.innerHTML = "";
+  timelineEl.style.backgroundImage = "none";
+  minimapEl.style.backgroundImage = "none";
+  fullWaveUrl = null;
+  viewStart = 0;
+  viewEnd = 0;
   curTimeEl.textContent = "0:00";
   durTimeEl.textContent = "0:00";
   nowPlayingEl.textContent = "—";
@@ -500,8 +553,8 @@ previewEl.addEventListener("change", (e) => {
   updateSelection();
 });
 
-$("#btnSelAll").addEventListener("click", () => setAllSelected(true));
-$("#btnSelNone").addEventListener("click", () => setAllSelected(false));
+const pickAll = $<HTMLInputElement>("#pickAll");
+pickAll.addEventListener("change", () => setAllSelected(pickAll.checked));
 
 function setAllSelected(v: boolean) {
   tracks.forEach((t) => (t.selected = v));
@@ -514,6 +567,8 @@ function setAllSelected(v: boolean) {
 function updateSelection() {
   const n = tracks.filter((t) => t.selected).length;
   $("#selCount").textContent = String(n);
+  pickAll.checked = n > 0 && n === tracks.length;
+  pickAll.indeterminate = n > 0 && n < tracks.length;
   tracks.forEach((t, i) =>
     timelineEl.querySelector(`.seg[data-i="${i}"]`)?.classList.toggle("off", !t.selected)
   );
@@ -533,10 +588,21 @@ useRegex.addEventListener("change", () => {
   reparse();
 });
 
+/** Set before a reparse that shouldn't lose the user's track selection (keyed by line). */
+let preserveSel: Map<number, boolean> | null = null;
+
 async function reparse() {
   const opts = { artist_first: artistFirst.checked, regex: useRegex.checked ? regexEl.value : null };
   try {
     tracks = await api.parse(tlText.value, opts);
+    if (preserveSel) {
+      const keep = preserveSel;
+      tracks.forEach((t) => {
+        const v = keep.get(t.line);
+        if (v !== undefined) t.selected = v;
+      });
+      preserveSel = null;
+    }
   } catch (e) {
     tracks = [];
     previewEl.innerHTML = `<li class="err">${escapeHtml(String(e))}</li>`;
@@ -552,11 +618,13 @@ async function reparse() {
         `<input type="checkbox" class="pick" data-i="${i}"${t.selected ? " checked" : ""} title="Include this track" />` +
         `<span class="pnum">${String(i + 1).padStart(pad, "0")}</span>` +
         `<span class="pt">${hms(t.start)}</span> <span class="ptitle">${escapeHtml(t.title || "(untitled)")}</span>` +
-        `${t.artist ? ` <span class="partist">— ${escapeHtml(t.artist)}</span>` : ""}</li>`
+        `${t.artist ? ` <span class="partist">— ${escapeHtml(t.artist)}</span>` : ""}` +
+        `<button class="rowedit" data-edit="${i}" title="Fine-tune start time">✎</button></li>`
     )
     .join("");
   updateEditedState();
   updateSelection();
+  updatePrecisionNote();
   renderTimeline();
 }
 
@@ -597,6 +665,12 @@ function loadPreview(p: PreviewInfo) {
   previewState("ready");
   $("#previewNote").classList.toggle("hidden", !p.encoded);
   renderTimeline();
+  // Waveform for the main timeline: rendered from the preview file so it lines up with
+  // playback. Fetched in the background — the timeline is usable before it arrives.
+  viewStart = 0;
+  viewEnd = 0;
+  fullWaveUrl = null;
+  loadFullWaveform();
   if (p.path.endsWith(".caf")) {
     // If metadata never arrives, the format isn't playable here — fall back.
     cafWatchdog = window.setTimeout(() => fallbackToEncoded("no response"), 6000);
@@ -637,13 +711,31 @@ audio.addEventListener("play", () => (btnPlay.textContent = "❚❚"));
 audio.addEventListener("pause", () => (btnPlay.textContent = "▶"));
 audio.addEventListener("loadedmetadata", () => {
   clearTimeout(cafWatchdog); // it plays — no fallback needed
-  durTimeEl.textContent = hms(audio.duration);
+  durTimeEl.textContent = hms(Math.floor(audio.duration));
+  viewStart = 0; // new audio -> back to the full view
+  viewEnd = audio.duration;
   renderTimeline();
 });
 audio.addEventListener("error", () => {
   if ((audio.getAttribute("src") || "").includes(".caf")) fallbackToEncoded("unsupported format");
 });
-audio.addEventListener("timeupdate", updatePlayhead);
+audio.addEventListener("timeupdate", () => {
+  // While zoomed in and playing, scroll the window along with the playhead.
+  const dur = previewDuration();
+  if (dur && !audio.paused && viewSpan() < dur - 0.01) {
+    const t = audio.currentTime;
+    if (t < viewStart || t > viewEnd) {
+      const span = viewSpan();
+      viewStart = Math.max(0, Math.min(dur - span, t - span / 2));
+      viewEnd = viewStart + span;
+      renderTimeline();
+      scheduleWaveform();
+      return; // renderTimeline already refreshed the playhead
+    }
+  }
+  updatePlayhead();
+  if (tuneDlg.open) renderTune(); // keep the zoom strip's playhead live
+});
 
 // Clicking picks a track by default; "Seek mode" switches to free scrubbing. Alt/Shift
 // inverts whichever is active, for one-offs. (Alt is Option on macOS; we also accept
@@ -654,9 +746,12 @@ const SEEK_MODE = "timelineSeekMode";
 const seekModeEl = $<HTMLInputElement>("#seekMode");
 seekModeEl.checked = localStorage.getItem(SEEK_MODE) === "1";
 function renderHint() {
-  $("#tlHint").innerHTML = seekModeEl.checked
-    ? `Click the timeline to scrub to that exact point · <b>${ALT}/Shift-click</b> to jump to a track's start instead · the chapter list always jumps.`
-    : `Click a block to jump to that track · <b>${ALT}/Shift-click</b> to scrub to an exact point · or turn on <b>Seek mode</b>.`;
+  const zoom = ` · <b>${isMac ? "⌘" : "Ctrl"}-scroll</b> to zoom · drag to pan when zoomed in`;
+  $("#tlHint").innerHTML =
+    (seekModeEl.checked
+      ? `Click the timeline to scrub to that exact point · <b>${ALT}/Shift-click</b> to jump to a track's start instead`
+      : `Click a block to jump to that track · <b>${ALT}/Shift-click</b> to scrub to an exact point · or turn on <b>Seek mode</b>`) +
+    zoom;
 }
 renderHint();
 seekModeEl.addEventListener("change", () => {
@@ -671,15 +766,14 @@ function trackAt(time: number): number {
   return idx;
 }
 
-const timeAtEvent = (e: MouseEvent, dur: number) => {
-  const r = timelineEl.getBoundingClientRect();
-  return Math.min(dur, Math.max(0, ((e.clientX - r.left) / r.width) * dur));
-};
-
 timelineEl.addEventListener("click", (e) => {
+  if (panMoved) {
+    panMoved = false; // that was a pan gesture, not a seek
+    return;
+  }
   const dur = previewDuration();
   if (!dur) return;
-  const t = timeAtEvent(e, dur);
+  const t = timeOf(e.clientX);
   const inverted = e.altKey || e.shiftKey;
   const wantTrackStart = seekModeEl.checked ? inverted : !inverted;
   const idx = trackAt(t);
@@ -693,7 +787,7 @@ document.body.appendChild(tip);
 timelineEl.addEventListener("mousemove", (e) => {
   const dur = previewDuration();
   if (!dur) return;
-  const t = timeAtEvent(e, dur);
+  const t = timeOf(e.clientX);
   const idx = trackAt(t);
   const trk = idx >= 0 ? tracks[idx] : null;
   const name = trk
@@ -711,22 +805,199 @@ function previewDuration(): number {
   return Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : info?.duration ?? 0;
 }
 
-/** Draw each track as a block on the timeline, so chapters are visible and clickable. */
+// ---- timeline zoom -----------------------------------------------------------
+// The timeline renders a *view window* [viewStart, viewEnd] rather than the whole file,
+// so zooming is just narrowing that window and re-rendering the waveform for it.
+let viewStart = 0;
+let viewEnd = 0;
+const MIN_SPAN = 2; // seconds — don't zoom past this
+
+const viewSpan = () => viewEnd - viewStart;
+function ensureView() {
+  const dur = previewDuration();
+  if (viewEnd <= viewStart || viewEnd > dur + 0.5) {
+    viewStart = 0;
+    viewEnd = dur;
+  }
+}
+/** time -> percentage across the visible window */
+const pctOf = (t: number) => ((t - viewStart) / viewSpan()) * 100;
+/** x position -> time */
+const timeOf = (clientX: number) => {
+  const r = timelineEl.getBoundingClientRect();
+  return viewStart + Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * viewSpan();
+};
+
+function zoomBy(factor: number, anchor?: number) {
+  const dur = previewDuration();
+  if (!dur) return;
+  ensureView();
+  const span = Math.min(dur, Math.max(MIN_SPAN, viewSpan() * factor));
+  const a = anchor ?? viewStart + viewSpan() / 2;
+  const ratio = (a - viewStart) / viewSpan();
+  viewStart = Math.max(0, Math.min(dur - span, a - ratio * span));
+  viewEnd = viewStart + span;
+  renderTimeline();
+  scheduleWaveform();
+}
+
+$("#zoomIn").addEventListener("click", () => zoomBy(0.5));
+$("#zoomOut").addEventListener("click", () => zoomBy(2));
+$("#zoomFit").addEventListener("click", () => {
+  viewStart = 0;
+  viewEnd = previewDuration();
+  renderTimeline();
+  scheduleWaveform();
+});
+// ⌘/Ctrl + wheel zooms at the cursor; plain wheel is left alone so the page still scrolls.
+timelineEl.addEventListener(
+  "wheel",
+  (e) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    e.preventDefault();
+    zoomBy(e.deltaY > 0 ? 1.3 : 0.77, timeOf(e.clientX));
+  },
+  { passive: false }
+);
+
+let waveTimer: number | undefined;
+let fullWaveUrl: string | null = null;
+
+function scheduleWaveform() {
+  clearTimeout(waveTimer);
+  waveTimer = window.setTimeout(loadWaveform, 200); // debounce rapid zooming
+}
+
+/** The whole-set waveform, reused as the minimap background (and at full zoom). */
+async function loadFullWaveform() {
+  if (!info) return;
+  try {
+    fullWaveUrl = convertFileSrc(await api.waveform(info.id, 2000));
+    minimapEl.style.backgroundImage = `url("${fullWaveUrl}")`;
+    if (viewSpan() >= previewDuration() - 0.01) {
+      timelineEl.style.backgroundImage = `url("${fullWaveUrl}")`;
+    }
+  } catch {
+    /* waveform is a nicety — never block the timeline on it */
+  }
+}
+
+async function loadWaveform() {
+  if (!info) return;
+  const dur = previewDuration();
+  if (!dur) return;
+  ensureView();
+  if (viewSpan() >= dur - 0.01) {
+    if (fullWaveUrl) timelineEl.style.backgroundImage = `url("${fullWaveUrl}")`;
+    else await loadFullWaveform();
+    return;
+  }
+  try {
+    const p = await api.waveformWindow(info.id, (viewStart + viewEnd) / 2, viewSpan() / 2, 2000);
+    timelineEl.style.backgroundImage = `url("${convertFileSrc(p)}")`;
+  } catch {
+    /* ignore */
+  }
+}
+
+// ---- minimap: where the visible window sits in the whole set ------------------
+const minimapEl = $("#minimap");
+
+function renderMinimap() {
+  const dur = previewDuration();
+  if (!dur) return;
+  const w = $("#mmWin");
+  w.style.left = `${(viewStart / dur) * 100}%`;
+  w.style.width = `${Math.max(1.5, (viewSpan() / dur) * 100)}%`;
+}
+
+/** Move the view so it's centred on `t` (clamped to the file). */
+function centerViewAt(t: number) {
+  const dur = previewDuration();
+  if (!dur) return;
+  const span = viewSpan();
+  viewStart = Math.max(0, Math.min(dur - span, t - span / 2));
+  viewEnd = viewStart + span;
+  renderTimeline();
+  scheduleWaveform();
+}
+
+let mmDragging = false;
+const mmTime = (clientX: number) => {
+  const r = minimapEl.getBoundingClientRect();
+  return Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * previewDuration();
+};
+minimapEl.addEventListener("pointerdown", (e) => {
+  mmDragging = true;
+  minimapEl.setPointerCapture(e.pointerId);
+  minimapEl.classList.add("dragging");
+  centerViewAt(mmTime(e.clientX));
+});
+window.addEventListener("pointermove", (e) => {
+  if (mmDragging) centerViewAt(mmTime(e.clientX));
+});
+window.addEventListener("pointerup", () => {
+  mmDragging = false;
+  minimapEl.classList.remove("dragging");
+});
+
+// ---- drag the timeline itself to pan (only meaningful when zoomed in) ---------
+let panning = false;
+let panMoved = false;
+let panStartX = 0;
+let panStartView = 0;
+
+timelineEl.addEventListener("pointerdown", (e) => {
+  if (viewSpan() >= previewDuration() - 0.01) return; // nothing to pan when fully out
+  panning = true;
+  panMoved = false;
+  panStartX = e.clientX;
+  panStartView = viewStart;
+  timelineEl.setPointerCapture(e.pointerId);
+});
+window.addEventListener("pointermove", (e) => {
+  if (!panning) return;
+  const dx = e.clientX - panStartX;
+  if (Math.abs(dx) > 4) panMoved = true; // otherwise it's a click, not a drag
+  if (!panMoved) return;
+  timelineEl.classList.add("panning");
+  const dur = previewDuration();
+  const span = viewSpan();
+  const dt = (dx / timelineEl.getBoundingClientRect().width) * span;
+  viewStart = Math.max(0, Math.min(dur - span, panStartView - dt));
+  viewEnd = viewStart + span;
+  renderTimeline();
+  scheduleWaveform();
+});
+window.addEventListener("pointerup", () => {
+  panning = false;
+  timelineEl.classList.remove("panning");
+});
+
+/** Draw each track as a block on the timeline, clipped to the visible window. */
 function renderTimeline() {
   const dur = previewDuration();
   if (!dur) {
     timelineEl.innerHTML = "";
     return;
   }
+  ensureView();
   const segs = tracks
     .map((t, i) => {
       const end = i + 1 < tracks.length ? tracks[i + 1].start : dur;
-      const left = (t.start / dur) * 100;
-      const width = Math.max(0.2, ((end - t.start) / dur) * 100);
+      if (end < viewStart || t.start > viewEnd) return ""; // outside the window
+      const left = Math.max(0, pctOf(t.start));
+      const right = Math.min(100, pctOf(end));
+      const width = Math.max(0.2, right - left);
       return `<div class="seg${i % 2 ? " alt" : ""}${t.selected ? "" : " off"}" data-i="${i}" style="left:${left}%;width:${width}%"></div>`;
     })
     .join("");
   timelineEl.innerHTML = `${segs}<div id="tlFill" class="tl-fill"></div><div id="tlHead" class="tl-head"></div>`;
+  const span = viewSpan();
+  const zoomed = span < dur - 0.01;
+  $("#zoomLabel").textContent = zoomed ? (span >= 60 ? hms(span) : `${Math.round(span)} s`) : "full";
+  timelineEl.classList.toggle("zoomed", zoomed); // grab cursor only when panning is possible
+  renderMinimap();
   updatePlayhead();
 }
 
@@ -735,10 +1006,13 @@ function updatePlayhead() {
   const fill = document.querySelector<HTMLElement>("#tlFill");
   const head = document.querySelector<HTMLElement>("#tlHead");
   if (!dur || !fill || !head) return;
-  const pct = Math.min(100, (audio.currentTime / dur) * 100);
-  fill.style.width = `${pct}%`;
-  head.style.left = `${pct}%`;
-  curTimeEl.textContent = hms(audio.currentTime);
+  ensureView();
+  const pct = pctOf(audio.currentTime);
+  const visible = pct >= 0 && pct <= 100;
+  fill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  head.style.left = `${Math.min(100, Math.max(0, pct))}%`;
+  head.style.opacity = visible ? "1" : "0"; // hide the head when scrolled out of view
+  curTimeEl.textContent = hms(Math.floor(audio.currentTime));
 
   const idx = trackAt(audio.currentTime);
   timelineEl.querySelectorAll(".seg.active").forEach((s) => s.classList.remove("active"));
@@ -752,6 +1026,107 @@ function updatePlayhead() {
     nowPlayingEl.textContent = "—";
   }
 }
+
+// ---- fine-tune editor (millisecond timing) -----------------------------------
+const tuneDlg = $<HTMLDialogElement>("#tuneDlg");
+const tuneInput = $<HTMLInputElement>("#tuneInput");
+const tuneZoom = $("#tuneZoom");
+const ZOOM_HALF = 5; // seconds shown either side of the original position
+let tuneIdx = -1;
+let tuneOrig = 0;
+let tuneVal = 0;
+
+previewEl.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest("button[data-edit]") as HTMLElement | null;
+  if (btn) {
+    e.stopPropagation();
+    openTune(Number(btn.dataset.edit));
+  }
+});
+
+function openTune(i: number) {
+  const t = tracks[i];
+  if (!t) return;
+  tuneIdx = i;
+  tuneOrig = t.start;
+  tuneVal = t.start;
+  $("#tuneTitle").textContent = `Fine-tune “${t.title || "(untitled)"}”`;
+  $("#zoomA").textContent = hms(Math.max(0, tuneOrig - ZOOM_HALF));
+  $("#zoomB").textContent = hms(tuneOrig + ZOOM_HALF);
+  tuneZoom.style.backgroundImage = "none";
+  renderTune();
+  tuneDlg.showModal();
+  // ~0.02s to render, so just fetch it on open
+  if (info) {
+    api
+      .waveformWindow(info.id, tuneOrig, ZOOM_HALF, 900)
+      .then((p) => (tuneZoom.style.backgroundImage = `url("${convertFileSrc(p)}")`))
+      .catch(() => {});
+  }
+}
+
+function renderTune() {
+  tuneInput.value = hms(tuneVal);
+  const d = tuneVal - tuneOrig;
+  $("#tuneDelta").textContent = d === 0 ? "unchanged" : `${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(3)} s`;
+  const winStart = tuneOrig - ZOOM_HALF;
+  const pos = ((tuneVal - winStart) / (ZOOM_HALF * 2)) * 100;
+  const play = ((audio.currentTime - winStart) / (ZOOM_HALF * 2)) * 100;
+  const ticks = Array.from({ length: 11 }, (_, k) => `<div class="ztick" style="left:${k * 10}%"></div>`).join("");
+  tuneZoom.innerHTML =
+    ticks +
+    `<div class="zorig" style="left:${(ZOOM_HALF / (ZOOM_HALF * 2)) * 100}%"></div>` +
+    `<div class="zmark" style="left:${Math.min(100, Math.max(0, pos))}%"></div>` +
+    (play >= 0 && play <= 100 ? `<div class="zplay" style="left:${play}%"></div>` : "");
+}
+
+tuneZoom.addEventListener("click", (e) => {
+  const r = tuneZoom.getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  tuneVal = Math.max(0, tuneOrig - ZOOM_HALF + ratio * ZOOM_HALF * 2);
+  renderTune();
+});
+tuneDlg.querySelectorAll<HTMLElement>(".nudges button").forEach((b) =>
+  b.addEventListener("click", () => {
+    tuneVal = Math.max(0, Math.round((tuneVal + Number(b.dataset.d)) * 1000) / 1000);
+    renderTune();
+  })
+);
+tuneInput.addEventListener("change", () => {
+  const v = parseHms(tuneInput.value);
+  if (v === null) {
+    tuneInput.classList.add("bad");
+    return;
+  }
+  tuneInput.classList.remove("bad");
+  tuneVal = v;
+  renderTune();
+});
+
+$("#tunePlayPre").addEventListener("click", () => seekTo(Math.max(0, tuneVal - 3)));
+$("#tunePlayAt").addEventListener("click", () => seekTo(tuneVal));
+$("#tuneStop").addEventListener("click", () => audio.pause());
+$("#tuneCancel").addEventListener("click", () => {
+  audio.pause();
+  tuneDlg.close();
+});
+
+$("#tuneApply").addEventListener("click", async () => {
+  const t = tracks[tuneIdx];
+  if (!t) return tuneDlg.close();
+  audio.pause();
+  try {
+    // Rewrite the raw text so it stays the single source of truth, then re-parse.
+    preserveSel = new Map(tracks.map((x) => [x.line, x.selected]));
+    tlText.value = await api.setTrackTime(tlText.value, t.line, tuneVal);
+    await reparse();
+    logLine(`Adjusted “${t.title || "(untitled)"}” to ${hms(tuneVal)}`);
+  } catch (e) {
+    setStatus(String(e), "err");
+    logLine(`ERROR: ${e}`);
+  }
+  tuneDlg.close();
+});
 
 // ---- step 3: cover -----------------------------------------------------------
 document.querySelectorAll<HTMLInputElement>("input[name=coverMode]").forEach((r) =>
@@ -801,6 +1176,31 @@ getCurrentWebview().onDragDropEvent((e) => {
     if (p) useCustomImage(p);
   }
 });
+
+// ---- precision: warn only when ms timings would actually be lost ---------------
+/** True when the chosen format results in a stream copy (packet-aligned cuts only). */
+function willStreamCopy(): boolean {
+  if (!info || preciseEl.checked) return false;
+  const target = formatEl.value === "native" ? info.native_ext : formatEl.value;
+  const src = info.native_ext === "m4a" ? "aac" : "opus";
+  return (target === "opus" && src === "opus") || ((target === "m4a" || target === "aac") && src === "aac");
+}
+
+function updatePrecisionNote() {
+  const hasMs = tracks.some((t) => Math.abs(t.start - Math.round(t.start)) > 0.0005);
+  const note = $("#precisionNote");
+  const show = hasMs && willStreamCopy();
+  note.classList.toggle("hidden", !show);
+  if (show) {
+    note.innerHTML =
+      `⏱ <b>You've set millisecond timings, but this format is stream-copied</b> — cuts can only ` +
+      `land on codec packet boundaries (~20 ms off). For exact boundaries pick <b>flac</b> ` +
+      `(exact and lossless, larger files), any converting format, or tick <b>Precise cuts</b> below ` +
+      `(re-encodes, small quality cost).`;
+  }
+}
+formatEl.addEventListener("change", updatePrecisionNote);
+preciseEl.addEventListener("change", updatePrecisionNote);
 
 // ---- step 4: pickers ---------------------------------------------------------
 albumEl.addEventListener("change", async () => {
@@ -854,6 +1254,7 @@ async function runJob() {
     tracks,
     audio_format: audioFormat,
     source_abr: info.native_abr,
+    precise_cuts: preciseEl.checked,
     album: albumEl.value,
     album_artist: albumArtistEl.value,
     cover_mode: coverMode,

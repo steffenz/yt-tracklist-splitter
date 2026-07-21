@@ -38,6 +38,10 @@ pub struct Track {
     /// (no ffmpeg run), but still contribute their timestamp as the previous track's end.
     #[serde(default = "yes")]
     pub selected: bool,
+    /// 0-based index of the source line this came from, so the fine-tune editor can
+    /// rewrite exactly that line's timestamp.
+    #[serde(default)]
+    pub line: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -79,6 +83,10 @@ pub struct JobConfig {
     pub audio_format: String,
     /// Source bitrate in kbps (from VideoInfo.native_abr); caps lossy transcodes.
     pub source_abr: f64,
+    /// Force re-encoding even when the target codec matches the source. Stream copies can
+    /// only cut on packet boundaries (~20ms); re-encoding gives sample-accurate starts.
+    #[serde(default)]
+    pub precise_cuts: bool,
     pub album: String,
     pub album_artist: String,
     /// "none" | "youtube" | "custom"

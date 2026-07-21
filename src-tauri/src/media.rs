@@ -152,17 +152,53 @@ fn preview_cmd(src: &Path, out: &Path, codec: Vec<String>, progress: bool) -> Ve
     a
 }
 
+/// Render a waveform image with ffmpeg's `showwavespic`. Measured cost: ~0.33s for a
+/// 3.5-minute file (full) and ~0.02s for a 10-second window, so the zoomed view in the
+/// fine-tune dialog is effectively free.
+pub async fn make_waveform(
+    app: &AppHandle,
+    src: &Path,
+    out: &Path,
+    size: &str,
+    color: &str,
+    window: Option<(f64, f64)>,
+) -> Result<(), String> {
+    if out.exists() {
+        return Ok(());
+    }
+    let mut args = vec!["-y".to_string(), "-hide_banner".into(), "-loglevel".into(), "error".into()];
+    if let Some((start, dur)) = window {
+        args.extend(["-ss".to_string(), format!("{:.3}", start.max(0.0)), "-t".into(), format!("{dur:.3}")]);
+    }
+    args.extend([
+        "-i".to_string(),
+        src.to_string_lossy().into_owned(),
+        "-filter_complex".into(),
+        format!("showwavespic=s={size}:colors={color}"),
+        "-frames:v".into(),
+        "1".into(),
+        out.to_string_lossy().into_owned(),
+    ]);
+    let (ok, _o, err) = sh::capture(app, "ffmpeg", args).await?;
+    if !ok {
+        return Err(format!("waveform render failed:\n{}", sh::tail(&err, 4)));
+    }
+    Ok(())
+}
+
 /// ffmpeg audio-codec args for producing `fmt` from a `source_codec` ("opus"/"aac")
 /// source, capping lossy re-encodes at the source bitrate (never encode higher).
-fn audio_codec_args(fmt: &str, source_codec: &str, source_abr: f64) -> Vec<String> {
+fn audio_codec_args(fmt: &str, source_codec: &str, source_abr: f64, precise: bool) -> Vec<String> {
     let cap = if source_abr > 0.0 {
         format!("{}k", source_abr.round() as i64)
     } else {
         "160k".into()
     };
-    // Same codec as the source → bit-exact stream copy, no quality loss.
-    let copy = (fmt == "opus" && source_codec == "opus")
-        || ((fmt == "m4a" || fmt == "aac") && source_codec == "aac");
+    // Same codec as the source → bit-exact stream copy, no quality loss. Unless the user
+    // wants sample-accurate boundaries, which a copy can't give (packet-aligned only).
+    let copy = !precise
+        && ((fmt == "opus" && source_codec == "opus")
+            || ((fmt == "m4a" || fmt == "aac") && source_codec == "aac"));
     if copy {
         return vec!["-c:a".into(), "copy".into()];
     }
@@ -274,6 +310,7 @@ pub async fn split_track(
     fmt: &str,
     source_codec: &str,
     source_abr: f64,
+    precise: bool,
     t: &Track,
     album: &str,
     album_artist: &str,
@@ -282,7 +319,7 @@ pub async fn split_track(
     cover: Option<&Path>,
 ) -> Result<(), String> {
     let meta = meta_args(t, album, album_artist, index, total);
-    let codec = audio_codec_args(fmt, source_codec, source_abr);
+    let codec = audio_codec_args(fmt, source_codec, source_abr, precise);
     let embed_art = cover.is_some() && ART_EMBED_OK.contains(&fmt);
     let base = vec![
         "-y".to_string(),

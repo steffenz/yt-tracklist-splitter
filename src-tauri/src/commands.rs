@@ -54,6 +54,13 @@ pub fn parse_tracklist(text: String, opts: ParseOptions) -> Result<Vec<Track>, S
     tracklist::parse(&text, &opts)
 }
 
+/// Rewrite one line's timestamp (used by the fine-tune editor) and hand back the new
+/// tracklist text, so the raw text remains the single source of truth.
+#[tauri::command]
+pub fn set_track_time(text: String, line: usize, seconds: f64) -> Result<String, String> {
+    tracklist::set_line_timestamp(&text, line, seconds)
+}
+
 /// Fetch the thumbnail and return a filesystem path (frontend converts to an asset URL).
 #[tauri::command]
 pub async fn get_thumbnail(app: AppHandle, url: String, video_id: String) -> Result<String, String> {
@@ -139,6 +146,44 @@ fn is_encoded(preview: &std::path::Path, source: &std::path::Path) -> bool {
         && media::source_codec(source) != "aac"
 }
 
+/// Locate this video's preview file (whatever form it took).
+fn preview_path(dir: &std::path::Path, vid: &str) -> Option<PathBuf> {
+    ["m4a", "caf"].iter().map(|e| dir.join(format!("preview_{vid}.{e}"))).find(|p| p.exists())
+}
+
+/// Waveform for the whole set, drawn from the PREVIEW file so it lines up exactly with
+/// what the player is playing. Cached per width.
+#[tauri::command]
+pub async fn waveform(app: AppHandle, video_id: String, width: u32) -> Result<String, String> {
+    let dir = cache::cache_dir(&app)?;
+    let src = preview_path(&dir, &video_id).ok_or("no preview prepared yet")?;
+    let out = dir.join(format!("wave_{video_id}_{width}.png"));
+    media::make_waveform(&app, &src, &out, &format!("{width}x120"), "#8b8ba8", None).await?;
+    Ok(out.to_string_lossy().into_owned())
+}
+
+/// Zoomed waveform around a boundary, for the fine-tune dialog (~0.02s to render).
+#[tauri::command]
+pub async fn waveform_window(
+    app: AppHandle,
+    video_id: String,
+    center: f64,
+    half: f64,
+    width: u32,
+) -> Result<String, String> {
+    let dir = cache::cache_dir(&app)?;
+    let src = preview_path(&dir, &video_id).ok_or("no preview prepared yet")?;
+    // The window length MUST be part of the key — otherwise two different zoom levels at
+    // the same centre would collide and the cached image would be served for the wrong span.
+    let key = (center * 100.0).round() as i64;
+    let span = (half * 100.0).round() as i64;
+    let out = dir.join(format!("zoom_{video_id}_{key}_{span}_{width}.png"));
+    let start = (center - half).max(0.0);
+    media::make_waveform(&app, &src, &out, &format!("{width}x110"), "#7c6cff", Some((start, half * 2.0)))
+        .await?;
+    Ok(out.to_string_lossy().into_owned())
+}
+
 /// An already-prepared preview, if one exists (so we can auto-load it). Prefers a
 /// previously-encoded m4a, since its playability is already proven on this machine.
 #[tauri::command]
@@ -205,8 +250,9 @@ pub async fn run_job(
         return Err("Cancelled.".into());
     }
     let source_codec = media::source_codec(&source);
-    let is_copy = (fmt == "opus" && source_codec == "opus")
-        || ((fmt == "m4a" || fmt == "aac") && source_codec == "aac");
+    let is_copy = !cfg.precise_cuts
+        && ((fmt == "opus" && source_codec == "opus")
+            || ((fmt == "m4a" || fmt == "aac") && source_codec == "aac"));
     let out_note = if is_copy {
         " (stream copy, no re-encode)".to_string()
     } else if fmt == "flac" || fmt == "wav" {
@@ -290,6 +336,7 @@ pub async fn run_job(
             &fmt,
             &source_codec,
             cfg.source_abr,
+            cfg.precise_cuts,
             t,
             &cfg.album,
             &cfg.album_artist,

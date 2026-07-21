@@ -12,7 +12,9 @@ use regex::Regex;
 
 /// A bare `mm:ss` / `h:mm:ss` / `hh:mm:ss` token. Boundaries are checked manually
 /// afterwards (the `regex` crate has no look-around).
-static TS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\d{1,3}:\d{2}(?::\d{2})?").unwrap());
+/// Fractional seconds are written with a dot (`20:09.250`) — unambiguous next to the
+/// colons that separate hours/minutes/seconds.
+static TS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\d{1,3}:\d{2}(?::\d{2})?(?:\.\d+)?").unwrap());
 /// ` - `, ` – `, ` — ` used as title/artist separators.
 static SEP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+[-\u{2013}\u{2014}]\s+").unwrap());
 /// Leading list markers: `1.`, `01)`, `#3`, bullets, stray dashes.
@@ -21,13 +23,44 @@ static LEAD_RE: Lazy<Regex> =
 /// Empty brackets left behind after stripping a bracketed timestamp, e.g. `[]` `()`.
 static EMPTY_BRACKETS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\[\(\{]\s*[\]\)\}]").unwrap());
 
+/// `mm:ss`, `h:mm:ss`, and either with fractional seconds (`mm:ss.mmm`).
 pub fn hms_to_seconds(ts: &str) -> Option<f64> {
-    let parts: Vec<i64> = ts.split(':').map(|p| p.parse::<i64>().ok()).collect::<Option<_>>()?;
-    match parts.as_slice() {
-        [m, s] => Some((m * 60 + s) as f64),
-        [h, m, s] => Some((h * 3600 + m * 60 + s) as f64),
+    let mut parts = ts.split(':').collect::<Vec<_>>();
+    // only the seconds field may carry a fraction
+    let secs: f64 = parts.pop()?.parse().ok()?;
+    let whole: Vec<i64> = parts.iter().map(|p| p.parse::<i64>().ok()).collect::<Option<_>>()?;
+    match whole.as_slice() {
+        [] => Some(secs),
+        [m] => Some((m * 60) as f64 + secs),
+        [h, m] => Some((h * 3600 + m * 60) as f64 + secs),
         _ => None,
     }
+}
+
+/// Render seconds back to a tracklist timestamp, keeping milliseconds only when needed.
+pub fn seconds_to_hms(total: f64) -> String {
+    let total = total.max(0.0);
+    let h = (total / 3600.0).floor() as i64;
+    let m = ((total % 3600.0) / 60.0).floor() as i64;
+    let s = total % 60.0;
+    let ms = ((s - s.floor()) * 1000.0).round() as i64;
+    let whole = s.floor() as i64;
+    let frac = if ms > 0 { format!(".{ms:03}") } else { String::new() };
+    if h > 0 {
+        format!("{h}:{m:02}:{whole:02}{frac}")
+    } else {
+        format!("{m:02}:{whole:02}{frac}")
+    }
+}
+
+/// Replace the first timestamp on `line_no` of `text` with `seconds`, leaving the rest of
+/// the line untouched. Used by the fine-tune editor so the raw text stays authoritative.
+pub fn set_line_timestamp(text: &str, line_no: usize, seconds: f64) -> Result<String, String> {
+    let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+    let line = lines.get(line_no).ok_or("line out of range")?.clone();
+    let (s, e, _) = *all_timestamps(&line).first().ok_or("no timestamp on that line")?;
+    lines[line_no] = format!("{}{}{}", &line[..s], seconds_to_hms(seconds), &line[e..]);
+    Ok(lines.join("\n"))
 }
 
 /// All boundary-valid timestamps on a line (not glued to another digit or `:` group),
@@ -71,7 +104,7 @@ fn split_title_artist(text: &str, artist_first: bool) -> (String, String) {
 /// (NOT sorted) so callers can measure monotonicity; sort before use.
 pub fn parse_heuristic(text: &str, artist_first: bool) -> Vec<Track> {
     let mut out = Vec::new();
-    for raw in text.lines() {
+    for (line_no, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
@@ -90,7 +123,7 @@ pub fn parse_heuristic(text: &str, artist_first: bool) -> Vec<Track> {
         rest.push_str(&line[prev..]);
         let cleaned = clean_text(&rest);
         let (title, artist) = split_title_artist(&cleaned, artist_first);
-        out.push(Track { start, title, artist, selected: true });
+        out.push(Track { start, title, artist, selected: true, line: line_no });
     }
     out
 }
@@ -99,7 +132,7 @@ pub fn parse_heuristic(text: &str, artist_first: bool) -> Vec<Track> {
 fn parse_regex(text: &str, pattern: &str) -> Result<Vec<Track>, String> {
     let rx = Regex::new(pattern).map_err(|e| format!("bad regex: {e}"))?;
     let mut out = Vec::new();
-    for raw in text.lines() {
+    for (line_no, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
@@ -112,6 +145,7 @@ fn parse_regex(text: &str, pattern: &str) -> Result<Vec<Track>, String> {
             title: caps.name("title").map(|m| m.as_str().trim().to_string()).unwrap_or_default(),
             artist: caps.name("artist").map(|m| m.as_str().trim().to_string()).unwrap_or_default(),
             selected: true,
+            line: line_no,
         });
     }
     Ok(out)
@@ -244,6 +278,36 @@ mod tests {
         assert_eq!(tracks[0].title, "Intro Track");
         assert_eq!(tracks[1].title, "Nightcall");
         assert_eq!(tracks[1].artist, "Kavinsky");
+    }
+
+    #[test]
+    fn millisecond_timestamps_round_trip() {
+        let t = "00:16.250 - A - X\n3:24 - B - Y\n1:02:15.5 - C - Z";
+        let tracks = parse_heuristic(t, false);
+        assert_eq!(tracks[0].start, 16.25);
+        assert_eq!(tracks[0].title, "A"); // the fraction must not leak into the title
+        assert_eq!(tracks[1].start, 204.0);
+        assert_eq!(tracks[2].start, 3735.5);
+        // formatting drops .000 but keeps real milliseconds
+        assert_eq!(seconds_to_hms(16.25), "00:16.250");
+        assert_eq!(seconds_to_hms(204.0), "03:24");
+        assert_eq!(seconds_to_hms(3735.5), "1:02:15.500");
+    }
+
+    #[test]
+    fn rewrites_only_the_target_line_timestamp() {
+        let t = "00:16 - A - X\n3:24 - B - Y\n5:00 - C - Z";
+        let out = set_line_timestamp(t, 1, 204.4).unwrap();
+        assert_eq!(out, "00:16 - A - X\n03:24.400 - B - Y\n5:00 - C - Z");
+        assert_eq!(parse_heuristic(&out, false)[1].start, 204.4);
+    }
+
+    #[test]
+    fn tracks_remember_their_source_line() {
+        let t = "intro blurb\n00:16 - A - X\n\n3:24 - B - Y";
+        let tracks = parse_heuristic(t, false);
+        assert_eq!(tracks[0].line, 1);
+        assert_eq!(tracks[1].line, 3);
     }
 
     #[test]

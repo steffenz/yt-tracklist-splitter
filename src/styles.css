@@ -100,6 +100,13 @@ button.ghost { background: transparent; font-size: 13px; }
   border-left: 2px solid var(--warn);
 }
 .editednote b { color: var(--warn); }
+/* same look, but flowing text (the edited note is a flex row; this one isn't) */
+.warnnote {
+  display: block; margin: 0 0 14px; padding: 9px 12px; border-radius: 8px;
+  font-size: 12.5px; line-height: 1.55; background: rgba(224,179,84,0.12);
+  color: var(--warn); border-left: 2px solid var(--warn);
+}
+.warnnote b { color: var(--warn); }
 .chip { text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; }
 .chip.active { border-color: var(--accent); background: rgba(124,108,255,0.12); }
 .chip-title { font-weight: 600; font-size: 13px; }
@@ -145,18 +152,20 @@ details.raw .tl-editor { padding: 12px; }
 
 /* chapter timeline: each track is a clickable block */
 .timeline {
-  position: relative; height: 46px; border-radius: 8px; overflow: hidden;
-  background: #0d0d13; border: 1px solid var(--line); cursor: pointer;
+  position: relative; height: 60px; border-radius: 8px; overflow: hidden;
+  background-color: #0d0d13; border: 1px solid var(--line); cursor: pointer;
+  background-size: 100% 100%; background-repeat: no-repeat; background-position: center;
 }
+/* chapter blocks tint the waveform rather than hiding it */
 .timeline .seg {
   position: absolute; top: 0; bottom: 0;
-  background: rgba(124,108,255,0.20);
-  border-right: 1px solid rgba(255,255,255,0.14);
+  background: rgba(124,108,255,0.14);
+  border-right: 1px solid rgba(255,255,255,0.16);
   transition: background 0.15s ease;
 }
-.timeline .seg.alt { background: rgba(124,108,255,0.32); }
-.timeline .seg:hover { background: rgba(124,108,255,0.55); }
-.timeline .seg.active { background: rgba(87,199,163,0.55); }
+.timeline .seg.alt { background: rgba(124,108,255,0.26); }
+.timeline .seg:hover { background: rgba(124,108,255,0.44); }
+.timeline .seg.active { background: rgba(87,199,163,0.40); }
 .timeline .tl-fill {
   position: absolute; left: 0; top: 0; bottom: 0; width: 0;
   background: rgba(255,255,255,0.10); pointer-events: none;
@@ -166,6 +175,35 @@ details.raw .tl-editor { padding: 12px; }
   background: #fff; box-shadow: 0 0 6px rgba(255,255,255,0.8); pointer-events: none;
 }
 .preview li.active { background: rgba(87,199,163,0.16); }
+/* minimap: the whole set, with a window showing what the timeline is displaying */
+.minimap {
+  position: relative; height: 26px; border-radius: 6px; overflow: hidden;
+  background-color: #0d0d13; border: 1px solid var(--line); cursor: pointer;
+  background-size: 100% 100%; background-repeat: no-repeat; opacity: 0.75;
+  transition: opacity 0.15s ease;
+}
+.minimap:hover { opacity: 1; }
+.minimap.dragging { cursor: grabbing; }
+.mm-win {
+  position: absolute; top: -1px; bottom: -1px;
+  background: rgba(124,108,255,0.26); border: 1px solid var(--accent);
+  border-radius: 4px; cursor: grab; box-sizing: border-box;
+}
+.minimap.dragging .mm-win { cursor: grabbing; }
+
+/* cursors: pointer when a click seeks, grab once panning is possible */
+.timeline.zoomed { cursor: grab; }
+.timeline.panning { cursor: grabbing; }
+
+/* zoom controls */
+.zoomctl { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; }
+.zoomctl button { padding: 2px 9px; font-size: 13px; line-height: 1.5; }
+.zoomlabel {
+  min-width: 52px; text-align: center; font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.timeline .tl-head { transition: opacity 0.15s ease; }
+
 /* seek-mode toggle switch */
 .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; margin-left: 10px; }
 .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
@@ -195,6 +233,37 @@ details.raw .tl-editor { padding: 12px; }
 .tltip .tt-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tltip .tt { color: var(--accent2); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
 
+/* fine-tune dialog */
+dialog.tune {
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
+  color: var(--text); padding: 22px; width: min(560px, 92vw); font: inherit;
+}
+dialog.tune::backdrop { background: rgba(0,0,0,0.55); }
+dialog.tune h3 { margin: 0 0 16px; font-size: 15px; font-weight: 600; }
+.tunerow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.tunerow input {
+  width: 160px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 17px; text-align: center; letter-spacing: 0.5px;
+}
+.tunerow input.bad { border-color: var(--danger); }
+.nudges { display: flex; align-items: center; gap: 6px; margin-bottom: 16px; }
+.nudges button { padding: 6px 10px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.nudge-unit { font-size: 11px; margin: 0 2px; }
+
+.tunezoom {
+  position: relative; height: 80px; border-radius: 8px; cursor: pointer;
+  background-color: #0d0d13; border: 1px solid var(--line); overflow: hidden;
+  background-size: 100% 100%; background-repeat: no-repeat; background-position: center;
+}
+.tunezoom .ztick { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.07); }
+.tunezoom .zorig { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: 0.7; }
+.tunezoom .zmark { position: absolute; top: -2px; bottom: -2px; width: 3px; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.tunezoom .zplay { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent2); }
+.zoomscale { display: flex; justify-content: space-between; font-size: 11px; margin: 5px 2px 16px; font-variant-numeric: tabular-nums; }
+.tuneactions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+dialog.tune .hint { margin: 14px 0 0; }
+dialog.tune code { background: var(--card2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
 .previewnote {
   margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted);
   background: rgba(224,179,84,0.09); border-left: 2px solid var(--warn);
@@ -209,9 +278,18 @@ details.raw .tl-editor { padding: 12px; }
   font-size: 13px;
 }
 .preview li { padding: 5px 8px; border-radius: 6px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; align-items: baseline; gap: 10px; cursor: pointer; }
-.chapters-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
-.selbtns { display: flex; gap: 6px; }
-button.tiny { padding: 3px 10px; font-size: 12px; }
+/* header row doubles as the table title + select-all control */
+.chapters-head {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+  padding: 0 14px 6px; border-bottom: 1px solid var(--line);
+}
+.chapters-head .pick { accent-color: var(--accent); cursor: pointer; margin: 0; }
+button.rowedit {
+  margin-left: auto; padding: 0 7px; font-size: 12px; line-height: 1.6;
+  background: transparent; border-color: transparent; color: var(--muted); opacity: 0;
+}
+.preview li:hover .rowedit { opacity: 1; }
+button.rowedit:hover { color: var(--accent); border-color: var(--accent); }
 .preview .pick { accent-color: var(--accent); cursor: pointer; margin: 0; flex: 0 0 auto; align-self: center; }
 /* deselected tracks stay visible (you still need their timestamp) but read as inactive */
 .preview li.off { opacity: 0.42; }
